@@ -4,6 +4,9 @@ import '../widgets/readiness_ring.dart';
 import '../widgets/metric_card.dart';
 import '../widgets/heart_rate_card.dart';
 import 'settings_screen.dart';
+import 'vitals_screen.dart';
+import 'sleep_screen.dart';
+import 'activity_screen.dart';
 
 /// Main dashboard screen — the Calm Score home page.
 class HomeScreen extends StatelessWidget {
@@ -182,6 +185,39 @@ class HomeScreen extends StatelessWidget {
     );
   }
 
+  void _pushFullScreen(BuildContext context, Widget screen, String title) {
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        pageBuilder: (context, animation, secondaryAnimation) => Scaffold(
+          backgroundColor: AppColors.background,
+          appBar: AppBar(
+            backgroundColor: AppColors.background,
+            elevation: 0,
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 16),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+            title: Text(title),
+            centerTitle: true,
+          ),
+          body: screen,
+        ),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(1.0, 0.0),
+              end: Offset.zero,
+            ).animate(CurvedAnimation(
+              parent: animation,
+              curve: Curves.easeOutCubic,
+            )),
+            child: child,
+          );
+        },
+      ),
+    );
+  }
+
   Widget _buildMetricsRow(BuildContext context) {
     return SizedBox(
       height: 160,
@@ -196,16 +232,10 @@ class HomeScreen extends StatelessWidget {
             accentColor: AppColors.pastelTeal,
             icon: Icons.bolt_rounded,
             onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: const Text('Feature coming soon'),
-                  behavior: SnackBarBehavior.floating,
-                  backgroundColor: AppColors.surfaceLight,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  duration: const Duration(seconds: 2),
-                ),
+              _pushFullScreen(
+                context,
+                const VitalsScreen(),
+                'Vitals',
               );
             },
           ),
@@ -216,16 +246,10 @@ class HomeScreen extends StatelessWidget {
             accentColor: AppColors.pastelLavender,
             icon: Icons.nightlight_round,
             onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: const Text('Feature coming soon'),
-                  behavior: SnackBarBehavior.floating,
-                  backgroundColor: AppColors.surfaceLight,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  duration: const Duration(seconds: 2),
-                ),
+              _pushFullScreen(
+                context,
+                const SleepScreen(),
+                'Sleep',
               );
             },
           ),
@@ -236,16 +260,10 @@ class HomeScreen extends StatelessWidget {
             accentColor: AppColors.pastelAmber,
             icon: Icons.local_fire_department_rounded,
             onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: const Text('Feature coming soon'),
-                  behavior: SnackBarBehavior.floating,
-                  backgroundColor: AppColors.surfaceLight,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  duration: const Duration(seconds: 2),
-                ),
+              _pushFullScreen(
+                context,
+                const ActivityScreen(),
+                'Activity',
               );
             },
           ),
@@ -256,16 +274,10 @@ class HomeScreen extends StatelessWidget {
             accentColor: AppColors.pastelCoral,
             icon: Icons.calendar_today_rounded,
             onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: const Text('Feature coming soon'),
-                  behavior: SnackBarBehavior.floating,
-                  backgroundColor: AppColors.surfaceLight,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  duration: const Duration(seconds: 2),
-                ),
+              _pushFullScreen(
+                context,
+                const _CycleDayPlaceholder(),
+                'Cycle Tracking',
               );
             },
           ),
@@ -428,6 +440,84 @@ class _InsightTag extends StatelessWidget {
               fontWeight: FontWeight.w500,
               fontSize: 12,
             ),
+      ),
+    );
+  }
+}
+
+class _CycleDayPlaceholder extends StatelessWidget {
+  const _CycleDayPlaceholder();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: AppColors.cardBorder, width: 0.5),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: AppColors.pastelCoral.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: const Icon(Icons.calendar_today_rounded, color: AppColors.pastelCoral, size: 22),
+                    ),
+                    const SizedBox(width: 16),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Cycle Track',
+                          style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                                color: AppColors.textSecondary,
+                                fontSize: 13,
+                              ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Day 6',
+                          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                                fontSize: 22,
+                                fontWeight: FontWeight.w500,
+                              ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
+                Text(
+                  'Follicular Phase',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: AppColors.pastelCoral,
+                        fontWeight: FontWeight.w600,
+                      ),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  'Your body temperature and resting heart rate are within optimal baseline ranges, indicating strong recovery status.',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        height: 1.5,
+                      ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
