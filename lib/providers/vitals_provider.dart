@@ -144,6 +144,7 @@ class LiveVitalsNotifier extends StateNotifier<LiveVitalsState> {
   void _stopLiveStreaming() {
     _updateTimer?.cancel();
     _updateTimer = null;
+    state = LiveVitalsState.initial();
   }
 
   void _updateHeartRate(int hr) {
