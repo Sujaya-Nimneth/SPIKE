@@ -740,11 +740,15 @@ class _DiscoveredDevicesList extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final connectionAsync = ref.watch(bleConnectionStateProvider);
     final state = connectionAsync.valueOrNull ?? BleConnectionState.disconnected;
-
-    // Only show during scanning
-    if (state != BleConnectionState.scanning) return const SizedBox.shrink();
-
     final resultsAsync = ref.watch(scanResultsProvider);
+    final hasResults = resultsAsync.valueOrNull?.isNotEmpty ?? false;
+
+    // Keep the list visible during scanning, connecting, or if we have results to display
+    if (state != BleConnectionState.scanning &&
+        state != BleConnectionState.connecting &&
+        !hasResults) {
+      return const SizedBox.shrink();
+    }
 
     return resultsAsync.when(
       data: (results) {

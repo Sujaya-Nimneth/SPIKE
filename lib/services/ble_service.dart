@@ -193,29 +193,37 @@ class BleService {
   /// Connect to a specific BLE device, discover the Colmi UART service,
   /// and subscribe to notifications.
   Future<void> _connect(BluetoothDevice device) async {
+    debugPrint('[BLE] _connect: Starting connection to ${device.platformName} (${device.remoteId})...');
     _updateState(BleConnectionState.connecting);
 
     try {
-      // Connect with auto-reconnect
+      // Connect directly without autoConnect queue (faster on Android)
+      debugPrint('[BLE] _connect: Calling device.connect(autoConnect: false)...');
       await device.connect(
-        autoConnect: true,
-        timeout: const Duration(seconds: 10),
+        autoConnect: false,
+        timeout: const Duration(seconds: 15),
       );
+      debugPrint('[BLE] _connect: device.connect() succeeded!');
 
       _connectedDevice = device;
 
       // Listen for disconnection events
       _connectionSub = device.connectionState.listen((state) {
+        debugPrint('[BLE] connectionState event: $state');
         if (state == BluetoothConnectionState.disconnected) {
           _onDisconnected();
         }
       });
 
       // Discover services and set up characteristics
+      debugPrint('[BLE] _connect: Discovering services...');
       await _discoverAndSubscribe(device);
+      debugPrint('[BLE] _connect: Service discovery and subscription succeeded!');
 
       _updateState(BleConnectionState.connected);
-    } catch (e) {
+    } catch (e, stack) {
+      debugPrint('[BLE] _connect: Error connecting to device: $e');
+      debugPrint('[BLE] Stacktrace: $stack');
       _updateState(BleConnectionState.error);
       await _cleanup();
     }
