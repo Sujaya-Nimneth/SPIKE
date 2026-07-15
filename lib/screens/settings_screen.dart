@@ -631,14 +631,15 @@ class _ScanButton extends ConsumerWidget {
     final isDisabled = isConnected;
 
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: isDisabled
           ? null
-          : () async {
+          : () {
               final service = ref.read(bleServiceProvider);
               if (isScanning) {
-                await service.stopScan();
+                service.stopScan();
               } else {
-                await service.forceStartScan();
+                service.forceStartScan();
               }
             },
       child: AnimatedContainer(

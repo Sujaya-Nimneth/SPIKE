@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'colmi_protocol.dart';
 
@@ -86,10 +87,18 @@ class BleService {
   /// triggered from the Settings screen even if a previous scan left
   /// the service in an unexpected state.
   Future<void> forceStartScan() async {
-    if (_disposed) return;
+    if (_disposed) {
+      debugPrint('[BLE] forceStartScan: disposed, returning');
+      return;
+    }
 
     // If already connected, don't scan
-    if (_currentState == BleConnectionState.connected) return;
+    if (_currentState == BleConnectionState.connected) {
+      debugPrint('[BLE] forceStartScan: already connected, returning');
+      return;
+    }
+
+    debugPrint('[BLE] forceStartScan: starting fresh scan...');
 
     // Stop any existing scan first
     try {
@@ -102,18 +111,31 @@ class BleService {
 
   /// Internal scan logic shared by [startScan] and [forceStartScan].
   Future<void> _performScan() async {
-    // Check adapter state
-    final adapterState = await FlutterBluePlus.adapterState.first;
-    if (adapterState != BluetoothAdapterState.on) {
-      // Try to turn on Bluetooth (Android only, iOS shows system dialog)
-      try {
-        await FlutterBluePlus.turnOn();
-      } catch (_) {
-        _updateState(BleConnectionState.error);
-        return;
+    debugPrint('[BLE] _performScan: checking adapter state...');
+
+    // Check adapter state with a timeout to prevent hanging
+    try {
+      final adapterState = await FlutterBluePlus.adapterState.first
+          .timeout(const Duration(seconds: 3));
+      debugPrint('[BLE] _performScan: adapter state = $adapterState');
+
+      if (adapterState != BluetoothAdapterState.on) {
+        debugPrint('[BLE] _performScan: BT is off, trying to turn on...');
+        try {
+          await FlutterBluePlus.turnOn();
+          debugPrint('[BLE] _performScan: turnOn succeeded');
+        } catch (e) {
+          debugPrint('[BLE] _performScan: turnOn failed: $e');
+          _updateState(BleConnectionState.error);
+          return;
+        }
       }
+    } catch (e) {
+      // Timeout or error checking adapter — proceed anyway
+      debugPrint('[BLE] _performScan: adapter check timed out/failed: $e, proceeding...');
     }
 
+    debugPrint('[BLE] _performScan: setting state to scanning');
     _updateState(BleConnectionState.scanning);
 
     // Cancel any prior scan subscription
@@ -121,10 +143,15 @@ class BleService {
 
     // Listen for scan results
     _scanSub = FlutterBluePlus.scanResults.listen((results) {
+      debugPrint('[BLE] scanResults: ${results.length} device(s) found');
       for (final result in results) {
         final name = result.device.platformName;
+        if (name.isNotEmpty) {
+          debugPrint('[BLE]   → ${result.device.platformName} (RSSI: ${result.rssi})');
+        }
         if (name.toLowerCase().contains('r02')) {
           // Found our ring — stop scanning and connect
+          debugPrint('[BLE] Found R02! Connecting...');
           FlutterBluePlus.stopScan();
           _scanSub?.cancel();
           _connect(result.device);
@@ -135,16 +162,19 @@ class BleService {
 
     // Start the scan (timeout after 15 seconds)
     try {
+      debugPrint('[BLE] _performScan: calling FlutterBluePlus.startScan()...');
       await FlutterBluePlus.startScan(
         timeout: const Duration(seconds: 15),
         androidUsesFineLocation: true,
       );
+      debugPrint('[BLE] _performScan: scan completed (timed out)');
 
       // If scan completes without finding a device
       if (_currentState == BleConnectionState.scanning) {
         _updateState(BleConnectionState.disconnected);
       }
     } catch (e) {
+      debugPrint('[BLE] _performScan: startScan error: $e');
       _updateState(BleConnectionState.error);
     }
   }
