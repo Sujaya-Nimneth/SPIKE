@@ -104,7 +104,7 @@ class LiveVitalsNotifier extends StateNotifier<LiveVitalsState> {
   Timer? _updateTimer;
   final Random _random = Random();
   StreamSubscription? _hrSubscription;
-  StreamSubscription? _connectionSubscription;
+  ProviderSubscription? _connectionSubscription;
 
   LiveVitalsNotifier(this._ref) : super(LiveVitalsState.initial()) {
     _setupListeners();
@@ -214,7 +214,7 @@ class LiveVitalsNotifier extends StateNotifier<LiveVitalsState> {
   void dispose() {
     _updateTimer?.cancel();
     _hrSubscription?.cancel();
-    _connectionSubscription?.cancel();
+    _connectionSubscription?.close();
     super.dispose();
   }
 }
