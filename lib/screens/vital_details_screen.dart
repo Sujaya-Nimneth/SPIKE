@@ -99,7 +99,6 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen> with Si
   }
 
   Widget _buildTopBar(BuildContext context, _VitalConfig config, BleConnectionState connectionState) {
-    final isConnected = connectionState == BleConnectionState.connected;
     return Row(
       children: [
         GestureDetector(
