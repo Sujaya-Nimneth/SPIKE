@@ -13,7 +13,7 @@
 
 ---
 
-*An Oura Ring-inspired dark-mode interface that connects to your Colmi R02 smart ring,*
+*A sleek dark-mode interface that connects to your Colmi R02 smart ring,*
 *streams live biometric data, detects stress spikes during meetings, and ranks your coworkers*
 *by how much they raise your heart rate.* 😅
 
@@ -28,8 +28,8 @@
 - Streams live BPM to the dashboard with a beautiful gradient area chart
 - Auto-scans on launch, auto-reconnects on disconnect
 
-### 📊 Readiness Dashboard
-- Oura-inspired circular readiness ring with animated progress
+### 📊 Calm Score Dashboard
+- Circular calm score ring with animated progress
 - Metric cards for HRV, body temperature, respiratory rate, and sleep
 - Frosted-glass bottom navigation bar with smooth transitions
 
@@ -49,7 +49,7 @@
 
 ## 🎨 Design
 
-Spike follows an **Oura Ring-inspired design language** with a deep dark-mode palette and pastel accents:
+Spike follows a **premium dark-mode design language** with a deep palette and pastel accents:
 
 | Role | Color | Hex |
 |---|---|---|
@@ -68,7 +68,7 @@ Spike follows an **Oura Ring-inspired design language** with a deep dark-mode pa
 ┌─────────────────────────────────────────────────────────┐
 │                      Presentation                       │
 │  HomeScreen · VitalsScreen · SleepScreen · Leaderboard  │
-│  HeartRateCard · ReadinessRing · MetricCard             │
+│  HeartRateCard · CalmRing · MetricCard                  │
 ├─────────────────────────────────────────────────────────┤
 │                    State Management                     │
 │         Riverpod Providers (ble · stress)               │
@@ -109,7 +109,7 @@ lib/
 │   ├── ble_providers.dart             # BLE connection, HR stream, auto-scan
 │   └── stress_providers.dart          # Stress analyzer, DB, leaderboard providers
 ├── screens/
-│   ├── home_screen.dart               # Readiness dashboard with ring + metrics
+│   ├── home_screen.dart               # Calm score dashboard with ring + metrics
 │   ├── vitals_screen.dart             # Heart rate & vital signs
 │   ├── sleep_screen.dart              # Sleep tracking view
 │   ├── activity_screen.dart           # Activity tracking view
@@ -121,13 +121,13 @@ lib/
 │   ├── database_service.dart          # SQLite CRUD with Completer-based init
 │   └── stress_analyzer_service.dart   # Rolling baseline, spike detection, reentrance guard
 ├── theme/
-│   ├── app_colors.dart                # Oura-inspired dark palette + pastel accents
+│   ├── app_colors.dart                # Spike dark palette + pastel accents
 │   └── app_theme.dart                 # Material theme configuration
 └── widgets/
     ├── bottom_nav_bar.dart            # Frosted-glass bottom navigation
     ├── heart_rate_card.dart           # Live HR chart with connection status dot
     ├── metric_card.dart               # Reusable metric display card
-    └── readiness_ring.dart            # Custom-painted circular progress ring
+    └── readiness_ring.dart            # Custom-painted circular calm score ring
 ```
 
 ---

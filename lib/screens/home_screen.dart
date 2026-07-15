@@ -4,7 +4,7 @@ import '../widgets/readiness_ring.dart';
 import '../widgets/metric_card.dart';
 import '../widgets/heart_rate_card.dart';
 
-/// Main dashboard screen — the Readiness home page.
+/// Main dashboard screen — the Calm Score home page.
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
@@ -24,7 +24,7 @@ class HomeScreen extends StatelessWidget {
             _buildTopBar(context),
             const SizedBox(height: 8),
 
-            // ── Hero: Readiness Ring ─────────────────────────────
+            // ── Hero: Calm Ring ──────────────────────────────────
             _buildHeroSection(context, ringSize),
             const SizedBox(height: 32),
 
@@ -60,7 +60,7 @@ class HomeScreen extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'ŌURA',
+                'SPIKE',
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(
                       color: AppColors.textTertiary,
                       letterSpacing: 4,
@@ -78,9 +78,9 @@ class HomeScreen extends StatelessWidget {
           ),
           const Spacer(),
           // Action icons
-          _TopBarIcon(icon: Icons.share_outlined),
+          _TopBarIcon(icon: Icons.share_outlined, tooltip: 'Share'),
           const SizedBox(width: 8),
-          _TopBarIcon(icon: Icons.settings_outlined),
+          _TopBarIcon(icon: Icons.settings_outlined, tooltip: 'Settings'),
         ],
       ),
     );
@@ -89,8 +89,8 @@ class HomeScreen extends StatelessWidget {
   Widget _buildHeroSection(BuildContext context, double ringSize) {
     return Column(
       children: [
-        // Readiness ring
-        ReadinessRing(
+        // Calm ring
+        CalmRing(
           score: 88,
           size: ringSize,
           strokeWidth: ringSize * 0.04,
@@ -108,7 +108,7 @@ class HomeScreen extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 48),
           child: Text(
-            'A great night\'s sleep can boost your readiness. '
+            'A great night\'s sleep can boost your calm score. '
             'If there are any challenging tasks on your to-do list, '
             'today could be the day to tackle them!',
             textAlign: TextAlign.center,
@@ -120,22 +120,37 @@ class HomeScreen extends StatelessWidget {
         ),
         const SizedBox(height: 16),
         // CTA button
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
-          decoration: BoxDecoration(
-            color: AppColors.surfaceVariant,
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(
-              color: AppColors.cardBorder,
-              width: 0.5,
-            ),
-          ),
-          child: Text(
-            'Learn more',
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                  color: AppColors.textPrimary,
-                  fontWeight: FontWeight.w500,
+        GestureDetector(
+          onTap: () {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text('Feature coming soon'),
+                behavior: SnackBarBehavior.floating,
+                backgroundColor: AppColors.surfaceLight,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
                 ),
+                duration: const Duration(seconds: 2),
+              ),
+            );
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
+            decoration: BoxDecoration(
+              color: AppColors.surfaceVariant,
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(
+                color: AppColors.cardBorder,
+                width: 0.5,
+              ),
+            ),
+            child: Text(
+              'Learn more',
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    color: AppColors.textPrimary,
+                    fontWeight: FontWeight.w500,
+                  ),
+            ),
           ),
         ),
       ],
@@ -149,33 +164,85 @@ class HomeScreen extends StatelessWidget {
         scrollDirection: Axis.horizontal,
         physics: const BouncingScrollPhysics(),
         padding: const EdgeInsets.symmetric(horizontal: 20),
-        children: const [
+        children: [
           MetricCard(
-            title: 'Readiness',
+            title: 'Calm',
             score: 88,
             accentColor: AppColors.pastelTeal,
             icon: Icons.bolt_rounded,
+            onTap: () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: const Text('Feature coming soon'),
+                  behavior: SnackBarBehavior.floating,
+                  backgroundColor: AppColors.surfaceLight,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+            },
           ),
-          SizedBox(width: 12),
+          const SizedBox(width: 12),
           MetricCard(
             title: 'Sleep',
             score: 84,
             accentColor: AppColors.pastelLavender,
             icon: Icons.nightlight_round,
+            onTap: () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: const Text('Feature coming soon'),
+                  behavior: SnackBarBehavior.floating,
+                  backgroundColor: AppColors.surfaceLight,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+            },
           ),
-          SizedBox(width: 12),
+          const SizedBox(width: 12),
           MetricCard(
             title: 'Activity',
             score: 91,
             accentColor: AppColors.pastelAmber,
             icon: Icons.local_fire_department_rounded,
+            onTap: () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: const Text('Feature coming soon'),
+                  behavior: SnackBarBehavior.floating,
+                  backgroundColor: AppColors.surfaceLight,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+            },
           ),
-          SizedBox(width: 12),
+          const SizedBox(width: 12),
           MetricCard(
             title: 'Cycle Day',
             score: 6,
             accentColor: AppColors.pastelCoral,
             icon: Icons.calendar_today_rounded,
+            onTap: () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: const Text('Feature coming soon'),
+                  behavior: SnackBarBehavior.floating,
+                  backgroundColor: AppColors.surfaceLight,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+            },
           ),
         ],
       ),
@@ -183,76 +250,91 @@ class HomeScreen extends StatelessWidget {
   }
 
   Widget _buildInsightCard(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            AppColors.pastelTeal.withValues(alpha: 0.08),
-            AppColors.surface,
+    return GestureDetector(
+      onTap: () {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Feature coming soon'),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: AppColors.surfaceLight,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      },
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              AppColors.pastelTeal.withValues(alpha: 0.08),
+              AppColors.surface,
+            ],
+          ),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: AppColors.pastelTeal.withValues(alpha: 0.15),
+            width: 0.5,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: AppColors.pastelSage.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(11),
+                  ),
+                  child: const Icon(
+                    Icons.auto_awesome,
+                    color: AppColors.pastelSage,
+                    size: 20,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  'Daily Insight',
+                  style: Theme.of(context).textTheme.headlineSmall,
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Rising heart health, with a dip in stress management',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    height: 1.3,
+                  ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'You\'ve done an amazing job supporting your heart health '
+              'with activity. Just be mindful to carve out enough time '
+              'for rest as you go.',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    height: 1.6,
+                  ),
+            ),
+            const SizedBox(height: 16),
+            // Tags
+            Wrap(
+              spacing: 8,
+              children: [
+                _InsightTag(label: 'Heart', color: AppColors.pastelCoral),
+                _InsightTag(label: 'Metabolic', color: AppColors.pastelAmber),
+                _InsightTag(label: 'Recovery', color: AppColors.pastelSage),
+              ],
+            ),
           ],
         ),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: AppColors.pastelTeal.withValues(alpha: 0.15),
-          width: 0.5,
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  color: AppColors.pastelSage.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(11),
-                ),
-                child: const Icon(
-                  Icons.auto_awesome,
-                  color: AppColors.pastelSage,
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Text(
-                'Daily Insight',
-                style: Theme.of(context).textTheme.headlineSmall,
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Text(
-            'Rising heart health, with a dip in stress management',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                  height: 1.3,
-                ),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            'You\'ve done an amazing job supporting your heart health '
-            'with activity. Just be mindful to carve out enough time '
-            'for rest as you go.',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  height: 1.6,
-                ),
-          ),
-          const SizedBox(height: 16),
-          // Tags
-          Wrap(
-            spacing: 8,
-            children: [
-              _InsightTag(label: 'Heart', color: AppColors.pastelCoral),
-              _InsightTag(label: 'Metabolic', color: AppColors.pastelAmber),
-              _InsightTag(label: 'Recovery', color: AppColors.pastelSage),
-            ],
-          ),
-        ],
       ),
     );
   }
@@ -260,22 +342,38 @@ class HomeScreen extends StatelessWidget {
 
 class _TopBarIcon extends StatelessWidget {
   final IconData icon;
-  const _TopBarIcon({required this.icon});
+  final String tooltip;
+  const _TopBarIcon({required this.icon, this.tooltip = ''});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 40,
-      height: 40,
-      decoration: BoxDecoration(
-        color: AppColors.surfaceVariant,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: AppColors.cardBorder,
-          width: 0.5,
+    return GestureDetector(
+      onTap: () {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Feature coming soon'),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: AppColors.surfaceLight,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      },
+      child: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: AppColors.surfaceVariant,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: AppColors.cardBorder,
+            width: 0.5,
+          ),
         ),
+        child: Icon(icon, color: AppColors.textSecondary, size: 20),
       ),
-      child: Icon(icon, color: AppColors.textSecondary, size: 20),
     );
   }
 }

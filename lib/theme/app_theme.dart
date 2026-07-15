@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'app_colors.dart';
 
-/// Application-wide dark theme inspired by the Oura ring UI.
+/// Application-wide dark theme for the Spike smart ring UI.
 class AppTheme {
   AppTheme._();
 

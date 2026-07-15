@@ -38,6 +38,7 @@ class VitalsScreen extends StatelessWidget {
                 subtitle: 'Resting average',
                 color: AppColors.pastelCoral,
                 trend: '↓ 3 from yesterday',
+                onTap: () => _showComingSoon(context),
               ),
             ),
             const SizedBox(height: 12),
@@ -50,6 +51,7 @@ class VitalsScreen extends StatelessWidget {
                 subtitle: 'Heart rate variability',
                 color: AppColors.pastelSage,
                 trend: '↑ 5 from yesterday',
+                onTap: () => _showComingSoon(context),
               ),
             ),
             const SizedBox(height: 12),
@@ -62,6 +64,7 @@ class VitalsScreen extends StatelessWidget {
                 subtitle: 'Deviation from baseline',
                 color: AppColors.pastelAmber,
                 trend: 'Within normal range',
+                onTap: () => _showComingSoon(context),
               ),
             ),
             const SizedBox(height: 12),
@@ -74,6 +77,7 @@ class VitalsScreen extends StatelessWidget {
                 subtitle: 'Breaths per minute',
                 color: AppColors.pastelBlue,
                 trend: 'Stable',
+                onTap: () => _showComingSoon(context),
               ),
             ),
             const SizedBox(height: 12),
@@ -86,10 +90,25 @@ class VitalsScreen extends StatelessWidget {
                 subtitle: 'Blood oxygen average',
                 color: AppColors.pastelLavender,
                 trend: 'Healthy range',
+                onTap: () => _showComingSoon(context),
               ),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  void _showComingSoon(BuildContext context) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Feature coming soon'),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: AppColors.surfaceLight,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        duration: const Duration(seconds: 2),
       ),
     );
   }
@@ -102,6 +121,7 @@ class _VitalTile extends StatelessWidget {
   final String subtitle;
   final Color color;
   final String trend;
+  final VoidCallback? onTap;
 
   const _VitalTile({
     required this.icon,
@@ -110,71 +130,75 @@ class _VitalTile extends StatelessWidget {
     required this.subtitle,
     required this.color,
     required this.trend,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: color.withValues(alpha: 0.12),
-          width: 0.5,
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: color.withValues(alpha: 0.12),
+            width: 0.5,
+          ),
         ),
-      ),
-      child: Row(
-        children: [
-          // Icon
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(14),
+        child: Row(
+          children: [
+            // Icon
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Icon(icon, color: color, size: 22),
             ),
-            child: Icon(icon, color: color, size: 22),
-          ),
-          const SizedBox(width: 16),
-          // Text
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        color: AppColors.textSecondary,
-                        fontSize: 13,
-                      ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  value,
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w500,
-                      ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  trend,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: color.withValues(alpha: 0.8),
-                        fontSize: 11,
-                      ),
-                ),
-              ],
+            const SizedBox(width: 16),
+            // Text
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          color: AppColors.textSecondary,
+                          fontSize: 13,
+                        ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    value,
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w500,
+                        ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    trend,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: color.withValues(alpha: 0.8),
+                          fontSize: 11,
+                        ),
+                  ),
+                ],
+              ),
             ),
-          ),
-          // Chevron
-          const Icon(
-            Icons.chevron_right_rounded,
-            color: AppColors.textTertiary,
-            size: 24,
-          ),
-        ],
+            // Chevron
+            const Icon(
+              Icons.chevron_right_rounded,
+              color: AppColors.textTertiary,
+              size: 24,
+            ),
+          ],
+        ),
       ),
     );
   }
