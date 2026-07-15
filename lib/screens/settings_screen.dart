@@ -614,97 +614,78 @@ class _BatteryBadge extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────
 // Scan Button
 // ─────────────────────────────────────────────────────────────────
 
-class _ScanButton extends ConsumerWidget {
+class _ScanButton extends ConsumerStatefulWidget {
   const _ScanButton();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_ScanButton> createState() => _ScanButtonState();
+}
+
+class _ScanButtonState extends ConsumerState<_ScanButton> {
+  bool _tapped = false;
+
+  void _handleTap() {
+    debugPrint('[Settings] Scan button tapped!');
+    setState(() => _tapped = true);
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (mounted) setState(() => _tapped = false);
+    });
+
+    final connectionAsync = ref.read(bleConnectionStateProvider);
+    final state = connectionAsync.valueOrNull ?? BleConnectionState.disconnected;
+    final isScanning = state == BleConnectionState.scanning;
+    final service = ref.read(bleServiceProvider);
+
+    if (isScanning) {
+      debugPrint('[Settings] Stopping scan...');
+      service.stopScan();
+    } else {
+      debugPrint('[Settings] Starting scan...');
+      service.forceStartScan();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final connectionAsync = ref.watch(bleConnectionStateProvider);
     final state = connectionAsync.valueOrNull ?? BleConnectionState.disconnected;
 
     final isScanning = state == BleConnectionState.scanning;
     final isConnected = state == BleConnectionState.connected;
-    final isDisabled = isConnected;
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(16),
-        splashColor: (isScanning
-                ? AppColors.pastelAmber
-                : AppColors.pastelTeal)
-            .withValues(alpha: 0.2),
-        onTap: isDisabled
-            ? null
-            : () {
-                debugPrint('[Settings] Scan button tapped! isScanning=$isScanning');
+    final accentColor = isScanning ? AppColors.pastelAmber : AppColors.pastelTeal;
 
-                final service = ref.read(bleServiceProvider);
-
-                if (isScanning) {
-                  service.stopScan();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: const Text('Scan stopped'),
-                      behavior: SnackBarBehavior.floating,
-                      backgroundColor: AppColors.surfaceLight,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      duration: const Duration(seconds: 1),
-                    ),
-                  );
-                } else {
-                  service.forceStartScan();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: const Text('Scanning for ring...'),
-                      behavior: SnackBarBehavior.floating,
-                      backgroundColor: AppColors.surfaceLight,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      duration: const Duration(seconds: 2),
-                    ),
-                  );
-                }
-              },
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          decoration: BoxDecoration(
-            gradient: isDisabled
-                ? null
-                : LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: isScanning
-                        ? [
-                            AppColors.pastelAmber.withValues(alpha: 0.15),
-                            AppColors.pastelAmber.withValues(alpha: 0.05),
-                          ]
-                        : [
-                            AppColors.pastelTeal.withValues(alpha: 0.15),
-                            AppColors.pastelTeal.withValues(alpha: 0.05),
-                          ],
-                  ),
-            color: isDisabled ? AppColors.surfaceVariant : null,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: isDisabled
-                  ? AppColors.cardBorder
-                  : isScanning
-                      ? AppColors.pastelAmber.withValues(alpha: 0.3)
-                      : AppColors.pastelTeal.withValues(alpha: 0.3),
-              width: 0.5,
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: SizedBox(
+        width: double.infinity,
+        height: 50,
+        child: TextButton(
+          onPressed: isConnected ? null : _handleTap,
+          style: TextButton.styleFrom(
+            backgroundColor: _tapped
+                ? accentColor.withValues(alpha: 0.2)
+                : accentColor.withValues(alpha: 0.08),
+            foregroundColor: accentColor,
+            disabledForegroundColor: AppColors.textTertiary,
+            disabledBackgroundColor: AppColors.surfaceVariant,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: BorderSide(
+                color: isConnected
+                    ? AppColors.cardBorder
+                    : accentColor.withValues(alpha: 0.3),
+                width: 0.5,
+              ),
             ),
+            padding: const EdgeInsets.symmetric(horizontal: 20),
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
             children: [
               if (isScanning) ...[
                 SizedBox(
@@ -725,21 +706,17 @@ class _ScanButton extends ConsumerWidget {
                 ),
               ] else ...[
                 Icon(
-                  isDisabled
+                  isConnected
                       ? Icons.bluetooth_connected_rounded
                       : Icons.search_rounded,
-                  color: isDisabled
-                      ? AppColors.textTertiary
-                      : AppColors.pastelTeal,
+                  color: isConnected ? AppColors.textTertiary : AppColors.pastelTeal,
                   size: 20,
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  isDisabled ? 'Already Connected' : 'Scan for Ring',
+                  isConnected ? 'Already Connected' : 'Scan for Ring',
                   style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        color: isDisabled
-                            ? AppColors.textTertiary
-                            : AppColors.pastelTeal,
+                        color: isConnected ? AppColors.textTertiary : AppColors.pastelTeal,
                         fontWeight: FontWeight.w600,
                       ),
                 ),
