@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/ble_providers.dart';
 import '../services/ble_service.dart';
 import '../theme/app_colors.dart';
+import '../screens/vital_details_screen.dart';
 
 /// A dark-themed heart rate chart card using fl_chart.
 ///
@@ -25,125 +26,149 @@ class HeartRateCard extends ConsumerWidget {
     // Display value: live HR if available, otherwise fallback to static
     final displayHr = latestHr ?? 72;
 
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: AppColors.cardBorder,
-          width: 0.5,
+    return GestureDetector(
+      onTap: () {
+        Navigator.of(context).push(
+          PageRouteBuilder(
+            pageBuilder: (context, animation, secondaryAnimation) => const VitalDetailsScreen(vitalType: VitalType.heartRate),
+            transitionsBuilder: (context, animation, secondaryAnimation, child) {
+              return SlideTransition(
+                position: Tween<Offset>(
+                  begin: const Offset(0.0, 0.15),
+                  end: Offset.zero,
+                ).animate(CurvedAnimation(
+                  parent: animation,
+                  curve: Curves.easeOutCubic,
+                )),
+                child: FadeTransition(
+                  opacity: animation,
+                  child: child,
+                ),
+              );
+            },
+          ),
+        );
+      },
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: AppColors.cardBorder,
+            width: 0.5,
+          ),
         ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header row
-          Row(
-            children: [
-              Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  color: AppColors.pastelCoral.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(11),
-                ),
-                child: const Icon(
-                  Icons.favorite_rounded,
-                  color: AppColors.pastelCoral,
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Text(
-                          'Heart Rate',
-                          style: Theme.of(context).textTheme.headlineSmall,
-                        ),
-                        const SizedBox(width: 8),
-                        // Connection status dot
-                        _ConnectionDot(state: connectionState),
-                      ],
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      latestHr != null ? 'Live from R02' : 'Last 24 hours',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: latestHr != null
-                                ? AppColors.pastelSage
-                                : AppColors.textTertiary,
-                          ),
-                    ),
-                  ],
-                ),
-              ),
-              // BPM badge
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: AppColors.pastelCoral.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(20),
-                  border: latestHr != null
-                      ? Border.all(
-                          color: AppColors.pastelCoral.withValues(alpha: 0.3),
-                          width: 0.5,
-                        )
-                      : null,
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      '$displayHr',
-                      style:
-                          Theme.of(context).textTheme.headlineSmall?.copyWith(
-                                color: AppColors.pastelCoral,
-                                fontSize: 18,
-                                fontWeight: FontWeight.w600,
-                              ),
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      'bpm',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: AppColors.pastelCoral.withValues(alpha: 0.7),
-                            fontSize: 11,
-                          ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 24),
-          // Chart
-          SizedBox(
-            height: 160,
-            child: _buildChart(),
-          ),
-          const SizedBox(height: 12),
-          // Time labels
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: ['12 AM', '6 AM', '12 PM', '6 PM', 'Now']
-                .map(
-                  (t) => Text(
-                    t,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          fontSize: 10,
-                          color: AppColors.textTertiary,
-                        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header row
+            Row(
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: AppColors.pastelCoral.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(11),
                   ),
-                )
-                .toList(),
-          ),
-        ],
+                  child: const Icon(
+                    Icons.favorite_rounded,
+                    color: AppColors.pastelCoral,
+                    size: 20,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            'Heart Rate',
+                            style: Theme.of(context).textTheme.headlineSmall,
+                          ),
+                          const SizedBox(width: 8),
+                          // Connection status dot
+                          _ConnectionDot(state: connectionState),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        latestHr != null ? 'Live from R02' : 'Last 24 hours',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: latestHr != null
+                                  ? AppColors.pastelSage
+                                  : AppColors.textTertiary,
+                            ),
+                      ),
+                    ],
+                  ),
+                ),
+                // BPM badge
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: AppColors.pastelCoral.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(20),
+                    border: latestHr != null
+                        ? Border.all(
+                            color: AppColors.pastelCoral.withValues(alpha: 0.3),
+                            width: 0.5,
+                          )
+                        : null,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '$displayHr',
+                        style:
+                            Theme.of(context).textTheme.headlineSmall?.copyWith(
+                                  color: AppColors.pastelCoral,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        'bpm',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: AppColors.pastelCoral.withValues(alpha: 0.7),
+                              fontSize: 11,
+                            ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+            // Chart
+            SizedBox(
+              height: 160,
+              child: _buildChart(),
+            ),
+            const SizedBox(height: 12),
+            // Time labels
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: ['12 AM', '6 AM', '12 PM', '6 PM', 'Now']
+                  .map(
+                    (t) => Text(
+                      t,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            fontSize: 10,
+                            color: AppColors.textTertiary,
+                          ),
+                    ),
+                  )
+                  .toList(),
+            ),
+          ],
+        ),
       ),
     );
   }
