@@ -360,7 +360,7 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen> with Si
 
   Widget _buildChartSection(BuildContext context, _VitalConfig config, bool isConnected) {
     return Container(
-      height: 240,
+      height: 250,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: AppColors.surface,
@@ -381,22 +381,43 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen> with Si
           Expanded(
             child: _isWeekly ? _buildWeeklyChart(config) : _buildLiveChart(config, isConnected),
           ),
+          if (!_isWeekly && !isConnected) ...[
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: ['12 AM', '6 AM', '12 PM', '6 PM', '12 AM']
+                  .map(
+                    (t) => Text(
+                      t,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            fontSize: 10,
+                            color: AppColors.textTertiary,
+                          ),
+                    ),
+                  )
+                  .toList(),
+            ),
+          ]
         ],
       ),
     );
   }
 
   Widget _buildLiveChart(_VitalConfig config, bool isConnected) {
-    if (config.liveHistory.isEmpty) {
-      return const Center(child: Text('No data recorded yet'));
+    final List<FlSpot> spots;
+    if (isConnected) {
+      if (config.liveHistory.isEmpty) {
+        return const Center(child: Text('No data recorded yet'));
+      }
+      spots = config.liveHistory.asMap().entries.map((entry) {
+        return FlSpot(entry.key.toDouble(), entry.value.value);
+      }).toList();
+    } else {
+      spots = config.todayCurve;
     }
 
-    final spots = config.liveHistory.asMap().entries.map((entry) {
-      return FlSpot(entry.key.toDouble(), entry.value.value);
-    }).toList();
-
     // Auto-scale X and Y axes
-    final yValues = config.liveHistory.map((e) => e.value).toList();
+    final yValues = spots.map((e) => e.y).toList();
     double minY = yValues.reduce(min);
     double maxY = yValues.reduce(max);
     final range = maxY - minY;
@@ -425,7 +446,7 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen> with Si
         titlesData: const FlTitlesData(show: false),
         borderData: FlBorderData(show: false),
         minX: 0,
-        maxX: (spots.length - 1).toDouble().clamp(1.0, 20.0),
+        maxX: (spots.length - 1).toDouble().clamp(1.0, 23.0),
         minY: minY,
         maxY: maxY,
         lineTouchData: LineTouchData(
@@ -682,6 +703,12 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen> with Si
           icon: Icons.favorite_rounded,
           trendText: 'Live resting pulse from ring',
           liveHistory: vitals.heartRateHistory,
+          todayCurve: const [
+            FlSpot(0, 62), FlSpot(1, 58), FlSpot(2, 55), FlSpot(3, 54), FlSpot(4, 56), FlSpot(5, 52),
+            FlSpot(6, 58), FlSpot(7, 65), FlSpot(8, 72), FlSpot(9, 78), FlSpot(10, 82), FlSpot(11, 76),
+            FlSpot(12, 80), FlSpot(13, 85), FlSpot(14, 78), FlSpot(15, 74), FlSpot(16, 70), FlSpot(17, 76),
+            FlSpot(18, 82), FlSpot(19, 79), FlSpot(20, 75), FlSpot(21, 70), FlSpot(22, 65), FlSpot(23, 62),
+          ],
           weeklyAverages: [71, 73, 70, 72, 74, 71, 72],
           hardMinY: 40,
           hardMaxY: 120,
@@ -703,6 +730,12 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen> with Si
           icon: Icons.show_chart_rounded,
           trendText: 'Heart rate variability telemetry',
           liveHistory: vitals.hrvHistory,
+          todayCurve: const [
+            FlSpot(0, 42), FlSpot(1, 45), FlSpot(2, 48), FlSpot(3, 46), FlSpot(4, 44), FlSpot(5, 45),
+            FlSpot(6, 42), FlSpot(7, 40), FlSpot(8, 43), FlSpot(9, 45), FlSpot(10, 46), FlSpot(11, 45),
+            FlSpot(12, 44), FlSpot(13, 42), FlSpot(14, 45), FlSpot(15, 47), FlSpot(16, 46), FlSpot(17, 45),
+            FlSpot(18, 44), FlSpot(19, 43), FlSpot(20, 45), FlSpot(21, 46), FlSpot(22, 44), FlSpot(23, 45),
+          ],
           weeklyAverages: [44, 46, 43, 45, 47, 45, 46],
           hardMinY: 20,
           hardMaxY: 80,
@@ -724,6 +757,12 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen> with Si
           icon: Icons.thermostat_rounded,
           trendText: 'Deviation from baseline threshold',
           liveHistory: vitals.bodyTempHistory,
+          todayCurve: const [
+            FlSpot(0, 0.15), FlSpot(1, 0.18), FlSpot(2, 0.22), FlSpot(3, 0.25), FlSpot(4, 0.20), FlSpot(5, 0.15),
+            FlSpot(6, 0.10), FlSpot(7, 0.12), FlSpot(8, 0.18), FlSpot(9, 0.25), FlSpot(10, 0.28), FlSpot(11, 0.24),
+            FlSpot(12, 0.20), FlSpot(13, 0.18), FlSpot(14, 0.22), FlSpot(15, 0.25), FlSpot(16, 0.24), FlSpot(17, 0.20),
+            FlSpot(18, 0.18), FlSpot(19, 0.15), FlSpot(20, 0.16), FlSpot(21, 0.20), FlSpot(22, 0.18), FlSpot(23, 0.20),
+          ],
           weeklyAverages: [0.1, 0.2, 0.15, 0.3, 0.2, 0.18, 0.22],
           hardMinY: -1.0,
           hardMaxY: 1.0,
@@ -745,6 +784,12 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen> with Si
           icon: Icons.air_rounded,
           trendText: 'Breaths per minute sleeping avg',
           liveHistory: vitals.respiratoryRateHistory,
+          todayCurve: const [
+            FlSpot(0, 15.0), FlSpot(1, 15.2), FlSpot(2, 15.4), FlSpot(3, 15.1), FlSpot(4, 14.9), FlSpot(5, 15.0),
+            FlSpot(6, 15.2), FlSpot(7, 15.5), FlSpot(8, 15.3), FlSpot(9, 15.1), FlSpot(10, 15.0), FlSpot(11, 15.2),
+            FlSpot(12, 15.4), FlSpot(13, 15.3), FlSpot(14, 15.1), FlSpot(15, 14.8), FlSpot(16, 15.0), FlSpot(17, 15.2),
+            FlSpot(18, 15.4), FlSpot(19, 15.2), FlSpot(20, 15.1), FlSpot(21, 15.3), FlSpot(22, 15.1), FlSpot(23, 15.2),
+          ],
           weeklyAverages: [15.1, 15.3, 15.0, 15.2, 15.4, 15.1, 15.2],
           hardMinY: 10,
           hardMaxY: 20,
@@ -766,6 +811,12 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen> with Si
           icon: Icons.water_drop_rounded,
           trendText: 'Blood oxygen saturation range',
           liveHistory: vitals.spo2History,
+          todayCurve: const [
+            FlSpot(0, 97), FlSpot(1, 97), FlSpot(2, 96), FlSpot(3, 97), FlSpot(4, 98), FlSpot(5, 97),
+            FlSpot(6, 97), FlSpot(7, 96), FlSpot(8, 97), FlSpot(9, 97), FlSpot(10, 98), FlSpot(11, 97),
+            FlSpot(12, 97), FlSpot(13, 96), FlSpot(14, 97), FlSpot(15, 97), FlSpot(16, 98), FlSpot(17, 97),
+            FlSpot(18, 97), FlSpot(19, 97), FlSpot(20, 96), FlSpot(21, 97), FlSpot(22, 98), FlSpot(23, 97),
+          ],
           weeklyAverages: [97, 97, 96.8, 97.4, 97.1, 97.2, 97.3],
           hardMinY: 90,
           hardMaxY: 100,
@@ -797,6 +848,7 @@ class _VitalConfig {
   final IconData icon;
   final String trendText;
   final List<VitalSample> liveHistory;
+  final List<FlSpot> todayCurve;
   final List<double> weeklyAverages;
   final double hardMinY;
   final double hardMaxY;
@@ -812,6 +864,7 @@ class _VitalConfig {
     required this.icon,
     required this.trendText,
     required this.liveHistory,
+    required this.todayCurve,
     required this.weeklyAverages,
     required this.hardMinY,
     required this.hardMaxY,
