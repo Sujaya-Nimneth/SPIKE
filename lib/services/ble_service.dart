@@ -77,6 +77,43 @@ class BleService {
       return;
     }
 
+    await _performScan();
+  }
+
+  /// Force a fresh scan, resetting any existing state first.
+  ///
+  /// Unlike [startScan], this bypasses the state guard so it can be
+  /// triggered from the Settings screen even if a previous scan left
+  /// the service in an unexpected state.
+  Future<void> forceStartScan() async {
+    if (_disposed) return;
+
+    // If already connected, don't scan
+    if (_currentState == BleConnectionState.connected) return;
+
+    // Stop any existing scan first
+    try {
+      await FlutterBluePlus.stopScan();
+    } catch (_) {}
+    await _scanSub?.cancel();
+
+    await _performScan();
+  }
+
+  /// Internal scan logic shared by [startScan] and [forceStartScan].
+  Future<void> _performScan() async {
+    // Check adapter state
+    final adapterState = await FlutterBluePlus.adapterState.first;
+    if (adapterState != BluetoothAdapterState.on) {
+      // Try to turn on Bluetooth (Android only, iOS shows system dialog)
+      try {
+        await FlutterBluePlus.turnOn();
+      } catch (_) {
+        _updateState(BleConnectionState.error);
+        return;
+      }
+    }
+
     _updateState(BleConnectionState.scanning);
 
     // Cancel any prior scan subscription

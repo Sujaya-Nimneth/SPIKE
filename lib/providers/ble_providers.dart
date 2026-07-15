@@ -112,3 +112,12 @@ final connectedDeviceNameProvider = Provider<String?>((ref) {
   );
 });
 
+// ── Bluetooth Adapter State ─────────────────────────────────────
+
+/// Streams the Bluetooth adapter state (on/off/turning on/etc).
+///
+/// Used by the Settings screen to show whether Bluetooth is enabled.
+final bleAdapterStateProvider =
+    StreamProvider<BluetoothAdapterState>((ref) {
+  return FlutterBluePlus.adapterState;
+});

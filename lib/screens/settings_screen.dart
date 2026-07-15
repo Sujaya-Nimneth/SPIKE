@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../theme/app_colors.dart';
 import '../providers/ble_providers.dart';
 import '../services/ble_service.dart';
@@ -33,6 +34,7 @@ class SettingsScreen extends ConsumerWidget {
                     // Device connection section
                     _SectionHeader(label: 'DEVICE'),
                     const SizedBox(height: 12),
+                    const _BluetoothOffBanner(),
                     const _ConnectionStatusCard(),
                     const SizedBox(height: 12),
                     const _ConnectedDeviceCard(),
@@ -128,6 +130,106 @@ class _SectionHeader extends StatelessWidget {
               letterSpacing: 4,
               fontSize: 11,
             ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Bluetooth Off Banner
+// ─────────────────────────────────────────────────────────────────
+
+class _BluetoothOffBanner extends ConsumerWidget {
+  const _BluetoothOffBanner();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final adapterAsync = ref.watch(bleAdapterStateProvider);
+    final adapterState = adapterAsync.valueOrNull;
+
+    // Only show when BT is explicitly off
+    if (adapterState == null || adapterState == BluetoothAdapterState.on) {
+      return const SizedBox.shrink();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: AppColors.pastelCoral.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: AppColors.pastelCoral.withValues(alpha: 0.2),
+            width: 0.5,
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: AppColors.pastelCoral.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(
+                Icons.bluetooth_disabled_rounded,
+                color: AppColors.pastelCoral,
+                size: 18,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Bluetooth is Off',
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          color: AppColors.pastelCoral,
+                          fontWeight: FontWeight.w600,
+                        ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Turn on Bluetooth to connect to your ring',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: AppColors.textTertiary,
+                          fontSize: 11,
+                        ),
+                  ),
+                ],
+              ),
+            ),
+            GestureDetector(
+              onTap: () async {
+                try {
+                  await FlutterBluePlus.turnOn();
+                } catch (_) {
+                  // iOS doesn't support turnOn — user must enable from Settings
+                }
+              },
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: AppColors.pastelCoral.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  'Turn On',
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: AppColors.pastelCoral,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.5,
+                        fontSize: 11,
+                      ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -536,7 +638,7 @@ class _ScanButton extends ConsumerWidget {
               if (isScanning) {
                 await service.stopScan();
               } else {
-                await service.startScan();
+                await service.forceStartScan();
               }
             },
       child: AnimatedContainer(
