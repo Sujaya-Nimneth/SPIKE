@@ -3,6 +3,7 @@ import '../theme/app_colors.dart';
 import '../widgets/readiness_ring.dart';
 import '../widgets/metric_card.dart';
 import '../widgets/heart_rate_card.dart';
+import 'settings_screen.dart';
 
 /// Main dashboard screen — the Calm Score home page.
 class HomeScreen extends StatelessWidget {
@@ -80,7 +81,31 @@ class HomeScreen extends StatelessWidget {
           // Action icons
           _TopBarIcon(icon: Icons.share_outlined, tooltip: 'Share'),
           const SizedBox(width: 8),
-          _TopBarIcon(icon: Icons.settings_outlined, tooltip: 'Settings'),
+          _TopBarIcon(
+            icon: Icons.settings_outlined,
+            tooltip: 'Settings',
+            onTap: () {
+              Navigator.of(context).push(
+                PageRouteBuilder(
+                  pageBuilder: (_, __, ___) => const SettingsScreen(),
+                  transitionDuration: const Duration(milliseconds: 300),
+                  reverseTransitionDuration: const Duration(milliseconds: 250),
+                  transitionsBuilder: (_, animation, __, child) {
+                    return SlideTransition(
+                      position: Tween<Offset>(
+                        begin: const Offset(1.0, 0.0),
+                        end: Offset.zero,
+                      ).animate(CurvedAnimation(
+                        parent: animation,
+                        curve: Curves.easeOutCubic,
+                      )),
+                      child: child,
+                    );
+                  },
+                ),
+              );
+            },
+          ),
         ],
       ),
     );
@@ -343,12 +368,13 @@ class HomeScreen extends StatelessWidget {
 class _TopBarIcon extends StatelessWidget {
   final IconData icon;
   final String tooltip;
-  const _TopBarIcon({required this.icon, this.tooltip = ''});
+  final VoidCallback? onTap;
+  const _TopBarIcon({required this.icon, this.tooltip = '', this.onTap});
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () {
+      onTap: onTap ?? () {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: const Text('Feature coming soon'),

@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../services/ble_service.dart';
 
 // ── BLE Service (singleton) ─────────────────────────────────────
@@ -83,3 +84,31 @@ final autoScanProvider = FutureProvider<void>((ref) async {
     },
   );
 });
+
+// ── Scan Results ────────────────────────────────────────────────
+
+/// Streams discovered BLE devices during an active scan.
+///
+/// Used by the Settings screen to show nearby devices in real time.
+final scanResultsProvider =
+    StreamProvider<List<ScanResult>>((ref) {
+  return FlutterBluePlus.scanResults;
+});
+
+// ── Connected Device Name ───────────────────────────────────────
+
+/// Exposes the platform name of the currently connected device.
+///
+/// Returns `null` when no device is connected.
+final connectedDeviceNameProvider = Provider<String?>((ref) {
+  final connectionState = ref.watch(bleConnectionStateProvider);
+  final service = ref.watch(bleServiceProvider);
+
+  // Re-evaluate whenever connection state changes
+  return connectionState.whenOrNull(
+    data: (state) => state == BleConnectionState.connected
+        ? service.connectedDevice?.platformName
+        : null,
+  );
+});
+
