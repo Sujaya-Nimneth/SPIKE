@@ -1,6 +1,6 @@
 import 'dart:ui';
 
-/// Oura-inspired deep dark-mode color palette with pastel accents.
+/// Spike deep dark-mode color palette with pastel accents.
 class AppColors {
   AppColors._();
 

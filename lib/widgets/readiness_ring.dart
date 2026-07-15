@@ -2,10 +2,10 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
 
-/// A sleek circular progress ring inspired by the Oura readiness indicator.
+/// A sleek circular progress ring for the Spike calm score indicator.
 ///
 /// Renders a gradient arc with an outer glow and a large centered score.
-class ReadinessRing extends StatelessWidget {
+class CalmRing extends StatelessWidget {
   final int score;
   final double size;
   final double strokeWidth;
@@ -13,14 +13,14 @@ class ReadinessRing extends StatelessWidget {
   final Color secondaryColor;
   final String label;
 
-  const ReadinessRing({
+  const CalmRing({
     super.key,
     this.score = 88,
     this.size = 240,
     this.strokeWidth = 10,
     this.primaryColor = AppColors.pastelTeal,
     this.secondaryColor = AppColors.pastelSage,
-    this.label = 'READINESS',
+    this.label = 'CALM',
   });
 
   @override

@@ -17,7 +17,7 @@ class AppBottomNavBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final items = [
       _NavItem(icon: Icons.sunny, label: 'Today'),
-      _NavItem(icon: Icons.bolt_rounded, label: 'Readiness'),
+      _NavItem(icon: Icons.bolt_rounded, label: 'Calm'),
       _NavItem(icon: Icons.nightlight_round, label: 'Sleep'),
       _NavItem(icon: Icons.local_fire_department_rounded, label: 'Activity'),
       _NavItem(icon: Icons.whatshot_rounded, label: 'Stress'),
