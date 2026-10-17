@@ -557,7 +557,7 @@ class _MeetingActionBanner extends StatelessWidget {
           child: GestureDetector(
             onTap: onStartSession,
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
               decoration: BoxDecoration(
                 color: AppColors.surface,
                 borderRadius: BorderRadius.circular(14),
@@ -575,13 +575,17 @@ class _MeetingActionBanner extends StatelessWidget {
                     size: 16,
                   ),
                   const SizedBox(width: 8),
-                  Text(
-                    'Start Meeting',
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          color: AppColors.pastelTeal,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
+                  Flexible(
+                    child: Text(
+                      'Start Meeting',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                            color: AppColors.pastelTeal,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                    ),
                   ),
                 ],
               ),
@@ -593,7 +597,7 @@ class _MeetingActionBanner extends StatelessWidget {
           child: GestureDetector(
             onTap: onLogManualSpike,
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
               decoration: BoxDecoration(
                 color: AppColors.surface,
                 borderRadius: BorderRadius.circular(14),
@@ -611,13 +615,17 @@ class _MeetingActionBanner extends StatelessWidget {
                     size: 16,
                   ),
                   const SizedBox(width: 8),
-                  Text(
-                    'Tag Coworker Spike',
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          color: AppColors.pastelCoral,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
+                  Flexible(
+                    child: Text(
+                      'Tag a Spike',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                            color: AppColors.pastelCoral,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                    ),
                   ),
                 ],
               ),
