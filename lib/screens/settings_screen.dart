@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../theme/app_colors.dart';
 import '../providers/ble_providers.dart';
+import '../providers/stress_providers.dart';
 import '../services/ble_service.dart';
 import '../utils/app_logger.dart';
 
@@ -13,6 +14,63 @@ import '../utils/app_logger.dart';
 /// and general app settings.
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
+
+  Future<void> _confirmClearData(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: const BorderSide(color: AppColors.cardBorder, width: 0.5),
+        ),
+        title: Text(
+          'Clear All Stress Data?',
+          style: Theme.of(ctx).textTheme.headlineSmall,
+        ),
+        content: Text(
+          'This will permanently delete all recorded stress spikes, coworker leaderboard entries, and active meeting sessions.',
+          style: Theme.of(ctx).textTheme.bodyMedium?.copyWith(
+                color: AppColors.textSecondary,
+              ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text(
+              'Cancel',
+              style: Theme.of(ctx).textTheme.bodyMedium?.copyWith(
+                    color: AppColors.textTertiary,
+                  ),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text(
+              'Clear Data',
+              style: Theme.of(ctx).textTheme.bodyMedium?.copyWith(
+                    color: AppColors.pastelCoral,
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await ref.read(stressAnalyzerServiceProvider).endMeetingSession();
+      await ref.read(databaseServiceProvider).clearAll();
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Stress events and leaderboard data cleared.'),
+            backgroundColor: AppColors.surfaceElevated,
+          ),
+        );
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -33,7 +91,7 @@ class SettingsScreen extends ConsumerWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     // Device connection section
-                    _SectionHeader(label: 'DEVICE'),
+                    const _SectionHeader(label: 'DEVICE'),
                     const SizedBox(height: 12),
                     const _BluetoothOffBanner(),
                     const _ConnectionStatusCard(),
@@ -46,8 +104,21 @@ class SettingsScreen extends ConsumerWidget {
 
                     const SizedBox(height: 32),
 
+                    // Data & Privacy section
+                    const _SectionHeader(label: 'DATA & PRIVACY'),
+                    const SizedBox(height: 12),
+                    _SettingsTile(
+                      icon: Icons.delete_outline_rounded,
+                      title: 'Clear Stress & Leaderboard Data',
+                      subtitle: 'Reset all recorded spikes and coworker rankings',
+                      accentColor: AppColors.pastelCoral,
+                      onTap: () => _confirmClearData(context, ref),
+                    ),
+
+                    const SizedBox(height: 32),
+
                     // General section
-                    _SectionHeader(label: 'GENERAL'),
+                    const _SectionHeader(label: 'GENERAL'),
                     const SizedBox(height: 12),
                     _SettingsTile(
                       icon: Icons.info_outline_rounded,
@@ -881,12 +952,14 @@ class _SettingsTile extends StatelessWidget {
   final IconData icon;
   final String title;
   final String? subtitle;
+  final Color accentColor;
   final VoidCallback onTap;
 
   const _SettingsTile({
     required this.icon,
     required this.title,
     this.subtitle,
+    this.accentColor = AppColors.pastelBlue,
     required this.onTap,
   });
 
@@ -903,10 +976,10 @@ class _SettingsTile extends StatelessWidget {
               width: 36,
               height: 36,
               decoration: BoxDecoration(
-                color: AppColors.pastelBlue.withValues(alpha: 0.1),
+                color: accentColor.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Icon(icon, color: AppColors.pastelBlue, size: 18),
+              child: Icon(icon, color: accentColor, size: 18),
             ),
             const SizedBox(width: 14),
             Expanded(
