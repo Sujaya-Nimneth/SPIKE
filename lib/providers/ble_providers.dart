@@ -2,35 +2,31 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../services/ble_service.dart';
 
-// ── BLE Service (singleton) ─────────────────────────────────────
+// ── BLE Service ─────────────────────────────────────────────────
 
-/// Provides the singleton [BleService] instance.
+/// Provides the [BleService] instance owned by the current [ProviderScope].
 final bleServiceProvider = Provider<BleService>((ref) {
   final service = BleService();
-  ref.onDispose(() => service.dispose());
+  ref.onDispose(() {
+    service.dispose();
+  });
   return service;
 });
 
 // ── Connection State ────────────────────────────────────────────
 
-/// Streams the current [BleConnectionState].
-///
-/// Starts as [BleConnectionState.disconnected] and updates whenever
-/// the BLE service reports a state change (scanning, connecting,
-/// connected, disconnected, error).
+/// Streams the current [BleConnectionState], immediately yielding the
+/// service's current state so late subscribers never miss prior transitions.
 final bleConnectionStateProvider =
-    StreamProvider<BleConnectionState>((ref) {
+    StreamProvider<BleConnectionState>((ref) async* {
   final service = ref.watch(bleServiceProvider);
-  return service.connectionStream;
+  yield service.currentState;
+  yield* service.connectionStream;
 });
 
 // ── Heart Rate Stream ───────────────────────────────────────────
 
 /// Streams real-time heart rate values (BPM) from the connected ring.
-///
-/// Only emits values when the ring is connected and HR streaming has
-/// been started. Values of 0 (sensor warming up) are filtered out by
-/// the protocol parser.
 final heartRateStreamProvider = StreamProvider<int>((ref) {
   final service = ref.watch(bleServiceProvider);
   return service.heartRateStream;
@@ -40,71 +36,67 @@ final heartRateStreamProvider = StreamProvider<int>((ref) {
 
 /// Holds the most recent heart rate value for synchronous widget reads.
 ///
-/// Returns `null` until the first HR value arrives from the ring.
+/// Resets to `null` when the ring disconnects so the UI never displays
+/// stale BPM readings as "Live".
 final latestHeartRateProvider = StateProvider<int?>((ref) {
   ref.listen<AsyncValue<int>>(heartRateStreamProvider, (_, next) {
     next.whenData((hr) {
       ref.controller.state = hr;
     });
   });
+
+  ref.listen<AsyncValue<BleConnectionState>>(
+    bleConnectionStateProvider,
+    (_, next) {
+      final state = next.valueOrNull;
+      if (state != null && state != BleConnectionState.connected) {
+        ref.controller.state = null;
+      }
+    },
+  );
+
   return null;
 });
 
 // ── Battery Status ──────────────────────────────────────────────
 
-/// Streams battery status updates from the connected ring.
+/// Streams battery status updates from the connected ring, seeding with
+/// the latest cached reading if available.
 final batteryStatusProvider =
-    StreamProvider<({int percent, bool isCharging})>((ref) {
+    StreamProvider<({int percent, bool isCharging})>((ref) async* {
   final service = ref.watch(bleServiceProvider);
-  return service.batteryStream;
+  final initial = service.latestBattery;
+  if (initial != null) {
+    yield initial;
+  }
+  yield* service.batteryStream;
 });
 
 // ── Auto-Scan Initializer ───────────────────────────────────────
 
-/// A provider that triggers BLE scanning automatically.
+/// Triggers BLE scanning automatically at app startup.
 ///
-/// Read this provider once at app startup to begin scanning for the
-/// R02 ring. It also starts the heart rate stream once connected.
+/// Once connected, [BleService] automatically starts all-day HR streaming
+/// and queries battery status.
 final autoScanProvider = FutureProvider<void>((ref) async {
   final service = ref.read(bleServiceProvider);
-
-  // Start scanning immediately
   await service.startScan();
-
-  // Listen for connection and auto-start HR streaming
-  ref.listen<AsyncValue<BleConnectionState>>(
-    bleConnectionStateProvider,
-    (_, next) {
-      next.whenData((state) async {
-        if (state == BleConnectionState.connected) {
-          await service.startHeartRateStream();
-          await service.requestBattery();
-        }
-      });
-    },
-  );
 });
 
 // ── Scan Results ────────────────────────────────────────────────
 
 /// Streams discovered BLE devices during an active scan.
-///
-/// Used by the Settings screen to show nearby devices in real time.
-final scanResultsProvider =
-    StreamProvider<List<ScanResult>>((ref) {
+final scanResultsProvider = StreamProvider<List<ScanResult>>((ref) {
   return FlutterBluePlus.scanResults;
 });
 
 // ── Connected Device Name ───────────────────────────────────────
 
 /// Exposes the platform name of the currently connected device.
-///
-/// Returns `null` when no device is connected.
 final connectedDeviceNameProvider = Provider<String?>((ref) {
   final connectionState = ref.watch(bleConnectionStateProvider);
   final service = ref.watch(bleServiceProvider);
 
-  // Re-evaluate whenever connection state changes
   return connectionState.whenOrNull(
     data: (state) => state == BleConnectionState.connected
         ? service.connectedDevice?.platformName
@@ -115,9 +107,6 @@ final connectedDeviceNameProvider = Provider<String?>((ref) {
 // ── Bluetooth Adapter State ─────────────────────────────────────
 
 /// Streams the Bluetooth adapter state (on/off/turning on/etc).
-///
-/// Used by the Settings screen to show whether Bluetooth is enabled.
-final bleAdapterStateProvider =
-    StreamProvider<BluetoothAdapterState>((ref) {
+final bleAdapterStateProvider = StreamProvider<BluetoothAdapterState>((ref) {
   return FlutterBluePlus.adapterState;
 });

@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../theme/app_colors.dart';
 import '../providers/ble_providers.dart';
+import '../providers/stress_providers.dart';
 import '../services/ble_service.dart';
+import '../utils/app_logger.dart';
 
 /// Full-screen settings page with BLE device connection management.
 ///
@@ -12,6 +14,63 @@ import '../services/ble_service.dart';
 /// and general app settings.
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
+
+  Future<void> _confirmClearData(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: const BorderSide(color: AppColors.cardBorder, width: 0.5),
+        ),
+        title: Text(
+          'Clear All Stress Data?',
+          style: Theme.of(ctx).textTheme.headlineSmall,
+        ),
+        content: Text(
+          'This will permanently delete all recorded stress spikes, coworker leaderboard entries, and active meeting sessions.',
+          style: Theme.of(ctx).textTheme.bodyMedium?.copyWith(
+                color: AppColors.textSecondary,
+              ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text(
+              'Cancel',
+              style: Theme.of(ctx).textTheme.bodyMedium?.copyWith(
+                    color: AppColors.textTertiary,
+                  ),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text(
+              'Clear Data',
+              style: Theme.of(ctx).textTheme.bodyMedium?.copyWith(
+                    color: AppColors.pastelCoral,
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await ref.read(stressAnalyzerServiceProvider).endMeetingSession();
+      await ref.read(databaseServiceProvider).clearAll();
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Stress events and leaderboard data cleared.'),
+            backgroundColor: AppColors.surfaceElevated,
+          ),
+        );
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -32,7 +91,7 @@ class SettingsScreen extends ConsumerWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     // Device connection section
-                    _SectionHeader(label: 'DEVICE'),
+                    const _SectionHeader(label: 'DEVICE'),
                     const SizedBox(height: 12),
                     const _BluetoothOffBanner(),
                     const _ConnectionStatusCard(),
@@ -45,8 +104,21 @@ class SettingsScreen extends ConsumerWidget {
 
                     const SizedBox(height: 32),
 
+                    // Data & Privacy section
+                    const _SectionHeader(label: 'DATA & PRIVACY'),
+                    const SizedBox(height: 12),
+                    _SettingsTile(
+                      icon: Icons.delete_outline_rounded,
+                      title: 'Clear Stress & Leaderboard Data',
+                      subtitle: 'Reset all recorded spikes and coworker rankings',
+                      accentColor: AppColors.pastelCoral,
+                      onTap: () => _confirmClearData(context, ref),
+                    ),
+
+                    const SizedBox(height: 32),
+
                     // General section
-                    _SectionHeader(label: 'GENERAL'),
+                    const _SectionHeader(label: 'GENERAL'),
                     const SizedBox(height: 12),
                     _SettingsTile(
                       icon: Icons.info_outline_rounded,
@@ -628,7 +700,7 @@ class _ScanButtonState extends ConsumerState<_ScanButton> {
   bool _tapped = false;
 
   void _handleTap() {
-    debugPrint('[Settings] Scan button tapped!');
+    AppLogger.info('Settings', 'Scan button tapped');
     setState(() => _tapped = true);
     Future.delayed(const Duration(milliseconds: 300), () {
       if (mounted) setState(() => _tapped = false);
@@ -640,10 +712,10 @@ class _ScanButtonState extends ConsumerState<_ScanButton> {
     final service = ref.read(bleServiceProvider);
 
     if (isScanning) {
-      debugPrint('[Settings] Stopping scan...');
+      AppLogger.info('Settings', 'Stopping scan...');
       service.stopScan();
     } else {
-      debugPrint('[Settings] Starting scan...');
+      AppLogger.info('Settings', 'Starting scan...');
       service.forceStartScan();
     }
   }
@@ -688,7 +760,7 @@ class _ScanButtonState extends ConsumerState<_ScanButton> {
             mainAxisSize: MainAxisSize.min,
             children: [
               if (isScanning) ...[
-                SizedBox(
+                const SizedBox(
                   width: 18,
                   height: 18,
                   child: CircularProgressIndicator(
@@ -777,7 +849,7 @@ class _DiscoveredDevicesList extends ConsumerWidget {
             Padding(
               padding: const EdgeInsets.only(left: 4, top: 4, bottom: 8),
               child: Text(
-                'Nearby Devices',
+                'Nearby Devices (tap to connect)',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: AppColors.textTertiary,
                     ),
@@ -785,74 +857,81 @@ class _DiscoveredDevicesList extends ConsumerWidget {
             ),
             ...namedDevices.map((r) => Padding(
                   padding: const EdgeInsets.only(bottom: 8),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 12),
-                    decoration: _cardDecoration(),
-                    child: Row(
-                      children: [
-                        Icon(
-                          Icons.bluetooth_rounded,
-                          color: r.device.platformName
-                                  .toLowerCase()
-                                  .contains('r02')
-                              ? AppColors.pastelTeal
-                              : AppColors.textTertiary,
-                          size: 20,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                r.device.platformName,
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .titleSmall
-                                    ?.copyWith(
-                                      color: AppColors.textPrimary,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                              ),
-                              Text(
-                                'RSSI: ${r.rssi} dBm',
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .bodySmall
-                                    ?.copyWith(
-                                      color: AppColors.textTertiary,
-                                      fontSize: 11,
-                                    ),
-                              ),
-                            ],
+                  child: GestureDetector(
+                    onTap: () {
+                      ref
+                          .read(bleServiceProvider)
+                          .connectToDevice(r.device);
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 12),
+                      decoration: _cardDecoration(),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.bluetooth_rounded,
+                            color: r.device.platformName
+                                    .toLowerCase()
+                                    .contains('r02')
+                                ? AppColors.pastelTeal
+                                : AppColors.textTertiary,
+                            size: 20,
                           ),
-                        ),
-                        if (r.device.platformName
-                            .toLowerCase()
-                            .contains('r02'))
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 3),
-                            decoration: BoxDecoration(
-                              color:
-                                  AppColors.pastelTeal.withValues(alpha: 0.12),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Text(
-                              'SPIKE',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .labelSmall
-                                  ?.copyWith(
-                                    color: AppColors.pastelTeal,
-                                    letterSpacing: 1.5,
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.w700,
-                                  ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  r.device.platformName,
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .titleSmall
+                                      ?.copyWith(
+                                        color: AppColors.textPrimary,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                ),
+                                Text(
+                                  'RSSI: ${r.rssi} dBm',
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .bodySmall
+                                      ?.copyWith(
+                                        color: AppColors.textTertiary,
+                                        fontSize: 11,
+                                      ),
+                                ),
+                              ],
                             ),
                           ),
-                      ],
+                          if (r.device.platformName
+                              .toLowerCase()
+                              .contains('r02'))
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: AppColors.pastelTeal
+                                    .withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                'SPIKE',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .labelSmall
+                                    ?.copyWith(
+                                      color: AppColors.pastelTeal,
+                                      letterSpacing: 1.5,
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                              ),
+                            ),
+                        ],
+                      ),
                     ),
                   ),
                 )),
@@ -873,12 +952,14 @@ class _SettingsTile extends StatelessWidget {
   final IconData icon;
   final String title;
   final String? subtitle;
+  final Color accentColor;
   final VoidCallback onTap;
 
   const _SettingsTile({
     required this.icon,
     required this.title,
     this.subtitle,
+    this.accentColor = AppColors.pastelBlue,
     required this.onTap,
   });
 
@@ -895,10 +976,10 @@ class _SettingsTile extends StatelessWidget {
               width: 36,
               height: 36,
               decoration: BoxDecoration(
-                color: AppColors.pastelBlue.withValues(alpha: 0.1),
+                color: accentColor.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Icon(icon, color: AppColors.pastelBlue, size: 18),
+              child: Icon(icon, color: accentColor, size: 18),
             ),
             const SizedBox(width: 14),
             Expanded(

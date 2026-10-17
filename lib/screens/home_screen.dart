@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../providers/stress_providers.dart';
 import '../theme/app_colors.dart';
+import '../utils/app_routes.dart';
+import '../utils/date_formatter.dart';
 import '../widgets/readiness_ring.dart';
 import '../widgets/metric_card.dart';
 import '../widgets/heart_rate_card.dart';
@@ -9,13 +13,14 @@ import 'sleep_screen.dart';
 import 'activity_screen.dart';
 
 /// Main dashboard screen — the Calm Score home page.
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final screenWidth = MediaQuery.of(context).size.width;
     final ringSize = (screenWidth * 0.55).clamp(180.0, 280.0);
+    final calmScore = ref.watch(calmScoreProvider).valueOrNull ?? 88;
 
     return SafeArea(
       bottom: false,
@@ -29,17 +34,17 @@ class HomeScreen extends StatelessWidget {
             const SizedBox(height: 8),
 
             // ── Hero: Calm Ring ──────────────────────────────────
-            _buildHeroSection(context, ringSize),
+            _buildHeroSection(context, ringSize, calmScore),
             const SizedBox(height: 32),
 
             // ── Metric Cards Row ─────────────────────────────────
-            _buildMetricsRow(context),
+            _buildMetricsRow(context, calmScore),
             const SizedBox(height: 24),
 
             // ── Heart Rate Card ──────────────────────────────────
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: const HeartRateCard(),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 20),
+              child: HeartRateCard(),
             ),
             const SizedBox(height: 24),
 
@@ -55,6 +60,8 @@ class HomeScreen extends StatelessWidget {
   }
 
   Widget _buildTopBar(BuildContext context) {
+    final todayText = DateFormatter.formatHeaderDate(DateTime.now());
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
       child: Row(
@@ -73,7 +80,7 @@ class HomeScreen extends StatelessWidget {
               ),
               const SizedBox(height: 2),
               Text(
-                'Wednesday, Jun 18',
+                todayText,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: AppColors.textSecondary,
                     ),
@@ -82,30 +89,14 @@ class HomeScreen extends StatelessWidget {
           ),
           const Spacer(),
           // Action icons
-          _TopBarIcon(icon: Icons.share_outlined, tooltip: 'Share'),
+          const _TopBarIcon(icon: Icons.share_outlined, tooltip: 'Share'),
           const SizedBox(width: 8),
           _TopBarIcon(
             icon: Icons.settings_outlined,
             tooltip: 'Settings',
             onTap: () {
               Navigator.of(context).push(
-                PageRouteBuilder(
-                  pageBuilder: (_, __, ___) => const SettingsScreen(),
-                  transitionDuration: const Duration(milliseconds: 300),
-                  reverseTransitionDuration: const Duration(milliseconds: 250),
-                  transitionsBuilder: (_, animation, __, child) {
-                    return SlideTransition(
-                      position: Tween<Offset>(
-                        begin: const Offset(1.0, 0.0),
-                        end: Offset.zero,
-                      ).animate(CurvedAnimation(
-                        parent: animation,
-                        curve: Curves.easeOutCubic,
-                      )),
-                      child: child,
-                    );
-                  },
-                ),
+                AppRoutes.slide(const SettingsScreen()),
               );
             },
           ),
@@ -114,19 +105,31 @@ class HomeScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildHeroSection(BuildContext context, double ringSize) {
+  Widget _buildHeroSection(
+    BuildContext context,
+    double ringSize,
+    int calmScore,
+  ) {
+    final headline = calmScore >= 80
+        ? 'Go get \'em'
+        : calmScore >= 60
+            ? 'Steady & focused'
+            : 'Take a breather';
+
     return Column(
       children: [
-        // Calm ring
-        CalmRing(
-          score: 88,
-          size: ringSize,
-          strokeWidth: ringSize * 0.04,
+        // Calm ring wrapped in RepaintBoundary
+        RepaintBoundary(
+          child: CalmRing(
+            score: calmScore,
+            size: ringSize,
+            strokeWidth: ringSize * 0.04,
+          ),
         ),
         const SizedBox(height: 24),
         // Motivational text
         Text(
-          'Go get \'em',
+          headline,
           style: Theme.of(context).textTheme.displayMedium?.copyWith(
                 fontSize: 26,
                 fontWeight: FontWeight.w500,
@@ -150,17 +153,7 @@ class HomeScreen extends StatelessWidget {
         // CTA button
         GestureDetector(
           onTap: () {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: const Text('Feature coming soon'),
-                behavior: SnackBarBehavior.floating,
-                backgroundColor: AppColors.surfaceLight,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                duration: const Duration(seconds: 2),
-              ),
-            );
+            _pushFullScreen(context, const VitalsScreen(), 'Vitals & Stress');
           },
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
@@ -187,8 +180,8 @@ class HomeScreen extends StatelessWidget {
 
   void _pushFullScreen(BuildContext context, Widget screen, String title) {
     Navigator.of(context).push(
-      PageRouteBuilder(
-        pageBuilder: (context, animation, secondaryAnimation) => Scaffold(
+      AppRoutes.slide(
+        Scaffold(
           backgroundColor: AppColors.background,
           appBar: AppBar(
             backgroundColor: AppColors.background,
@@ -202,23 +195,11 @@ class HomeScreen extends StatelessWidget {
           ),
           body: screen,
         ),
-        transitionsBuilder: (context, animation, secondaryAnimation, child) {
-          return SlideTransition(
-            position: Tween<Offset>(
-              begin: const Offset(1.0, 0.0),
-              end: Offset.zero,
-            ).animate(CurvedAnimation(
-              parent: animation,
-              curve: Curves.easeOutCubic,
-            )),
-            child: child,
-          );
-        },
       ),
     );
   }
 
-  Widget _buildMetricsRow(BuildContext context) {
+  Widget _buildMetricsRow(BuildContext context, int calmScore) {
     return SizedBox(
       height: 160,
       child: ListView(
@@ -228,7 +209,7 @@ class HomeScreen extends StatelessWidget {
         children: [
           MetricCard(
             title: 'Calm',
-            score: 88,
+            score: calmScore,
             accentColor: AppColors.pastelTeal,
             icon: Icons.bolt_rounded,
             onTap: () {
@@ -289,17 +270,7 @@ class HomeScreen extends StatelessWidget {
   Widget _buildInsightCard(BuildContext context) {
     return GestureDetector(
       onTap: () {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('Feature coming soon'),
-            behavior: SnackBarBehavior.floating,
-            backgroundColor: AppColors.surfaceLight,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            duration: const Duration(seconds: 2),
-          ),
-        );
+        _pushFullScreen(context, const VitalsScreen(), 'Vitals & Stress');
       },
       child: Container(
         padding: const EdgeInsets.all(20),
@@ -362,7 +333,7 @@ class HomeScreen extends StatelessWidget {
             ),
             const SizedBox(height: 16),
             // Tags
-            Wrap(
+            const Wrap(
               spacing: 8,
               children: [
                 _InsightTag(label: 'Heart', color: AppColors.pastelCoral),
@@ -386,19 +357,20 @@ class _TopBarIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: onTap ?? () {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('Feature coming soon'),
-            behavior: SnackBarBehavior.floating,
-            backgroundColor: AppColors.surfaceLight,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            duration: const Duration(seconds: 2),
-          ),
-        );
-      },
+      onTap: onTap ??
+          () {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text('Feature coming soon'),
+                behavior: SnackBarBehavior.floating,
+                backgroundColor: AppColors.surfaceLight,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                duration: const Duration(seconds: 2),
+              ),
+            );
+          },
       child: Container(
         width: 40,
         height: 40,
@@ -474,7 +446,11 @@ class _CycleDayPlaceholder extends StatelessWidget {
                         color: AppColors.pastelCoral.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(14),
                       ),
-                      child: const Icon(Icons.calendar_today_rounded, color: AppColors.pastelCoral, size: 22),
+                      child: const Icon(
+                        Icons.calendar_today_rounded,
+                        color: AppColors.pastelCoral,
+                        size: 22,
+                      ),
                     ),
                     const SizedBox(width: 16),
                     Column(
@@ -482,15 +458,19 @@ class _CycleDayPlaceholder extends StatelessWidget {
                       children: [
                         Text(
                           'Cycle Track',
-                          style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                                color: AppColors.textSecondary,
-                                fontSize: 13,
-                              ),
+                          style:
+                              Theme.of(context).textTheme.titleSmall?.copyWith(
+                                    color: AppColors.textSecondary,
+                                    fontSize: 13,
+                                  ),
                         ),
                         const SizedBox(height: 2),
                         Text(
                           'Day 6',
-                          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                          style: Theme.of(context)
+                              .textTheme
+                              .headlineSmall
+                              ?.copyWith(
                                 fontSize: 22,
                                 fontWeight: FontWeight.w500,
                               ),

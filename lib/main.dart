@@ -46,8 +46,8 @@ class SmartRingApp extends StatelessWidget {
 
 /// The main shell that hosts the bottom navigation and screen stack.
 ///
-/// Uses [ConsumerStatefulWidget] to initialize the auto-scan provider
-/// at startup, which begins searching for the R02 ring immediately.
+/// Lazily mounts tabs on first visit and disables tickers on inactive tabs
+/// so offscreen screens do not consume CPU/GPU frames.
 class MainShell extends ConsumerStatefulWidget {
   const MainShell({super.key});
 
@@ -57,8 +57,9 @@ class MainShell extends ConsumerStatefulWidget {
 
 class _MainShellState extends ConsumerState<MainShell> {
   int _currentIndex = 0;
+  final Set<int> _visitedTabs = {0};
 
-  final _screens = const <Widget>[
+  static const _screens = <Widget>[
     HomeScreen(),
     VitalsScreen(),
     SleepScreen(),
@@ -69,10 +70,8 @@ class _MainShellState extends ConsumerState<MainShell> {
   @override
   void initState() {
     super.initState();
-    // Trigger auto-scan for the R02 ring on app launch
     Future.microtask(() {
       ref.read(autoScanProvider);
-      // Initialize the stress analyzer (starts listening to HR stream)
       ref.read(stressAnalyzerProvider);
     });
   }
@@ -81,16 +80,29 @@ class _MainShellState extends ConsumerState<MainShell> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.background,
-      extendBody: true, // content flows behind the nav bar
+      extendBody: true,
       body: IndexedStack(
         index: _currentIndex,
-        children: _screens,
+        children: List.generate(_screens.length, (index) {
+          if (!_visitedTabs.contains(index)) {
+            return const SizedBox.shrink();
+          }
+          return TickerMode(
+            enabled: index == _currentIndex,
+            child: _screens[index],
+          );
+        }),
       ),
       bottomNavigationBar: AppBottomNavBar(
         currentIndex: _currentIndex,
-        onTap: (index) => setState(() => _currentIndex = index),
+        onTap: (index) {
+          if (index == _currentIndex) return;
+          setState(() {
+            _visitedTabs.add(index);
+            _currentIndex = index;
+          });
+        },
       ),
     );
   }
 }
-

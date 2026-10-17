@@ -13,46 +13,49 @@ class AppBottomNavBar extends StatelessWidget {
     required this.onTap,
   });
 
+  static const List<_NavItem> _items = [
+    _NavItem(icon: Icons.sunny, label: 'Today'),
+    _NavItem(icon: Icons.bolt_rounded, label: 'Calm'),
+    _NavItem(icon: Icons.nightlight_round, label: 'Sleep'),
+    _NavItem(icon: Icons.local_fire_department_rounded, label: 'Activity'),
+    _NavItem(icon: Icons.whatshot_rounded, label: 'Stress'),
+  ];
+
   @override
   Widget build(BuildContext context) {
-    final items = [
-      _NavItem(icon: Icons.sunny, label: 'Today'),
-      _NavItem(icon: Icons.bolt_rounded, label: 'Calm'),
-      _NavItem(icon: Icons.nightlight_round, label: 'Sleep'),
-      _NavItem(icon: Icons.local_fire_department_rounded, label: 'Activity'),
-      _NavItem(icon: Icons.whatshot_rounded, label: 'Stress'),
-    ];
-
-    return ClipRRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
-        child: Container(
-          decoration: BoxDecoration(
-            color: AppColors.navBarBackground.withValues(alpha: 0.92),
-            border: const Border(
-              top: BorderSide(
-                color: AppColors.divider,
-                width: 0.5,
+    return RepaintBoundary(
+      child: ClipRRect(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+          child: Container(
+            decoration: BoxDecoration(
+              color: AppColors.navBarBackground.withValues(alpha: 0.92),
+              border: const Border(
+                top: BorderSide(
+                  color: AppColors.divider,
+                  width: 0.5,
+                ),
               ),
             ),
-          ),
-          child: SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: List.generate(items.length, (index) {
-                  final isActive = index == currentIndex;
-                  final item = items[index];
-                  return _NavBarButton(
-                    icon: item.icon,
-                    label: item.label,
-                    isActive: isActive,
-                    color: isActive ? AppColors.navActive : AppColors.navInactive,
-                    onTap: () => onTap(index),
-                  );
-                }),
+            child: SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: List.generate(_items.length, (index) {
+                    final isActive = index == currentIndex;
+                    final item = _items[index];
+                    return _NavBarButton(
+                      icon: item.icon,
+                      label: item.label,
+                      isActive: isActive,
+                      color:
+                          isActive ? AppColors.navActive : AppColors.navInactive,
+                      onTap: () => onTap(index),
+                    );
+                  }),
+                ),
               ),
             ),
           ),
@@ -110,7 +113,7 @@ class _NavBarButton extends StatelessWidget {
                           blurRadius: 6,
                         ),
                       ]
-                    : [],
+                    : const [],
               ),
             ),
             // Icon

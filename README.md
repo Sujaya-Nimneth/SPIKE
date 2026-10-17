@@ -4,7 +4,7 @@
 
 ### A premium Flutter companion app for the Colmi R02 BLE smart ring
 
-**Real-time heart rate monitoring · Stress detection algorithm · Coworker stress leaderboard**
+**Real-time heart rate monitoring · Stress detection v2 algorithm · Coworker stress leaderboard**
 
 ![Flutter](https://img.shields.io/badge/Flutter-3.7+-02569B?style=for-the-badge&logo=flutter&logoColor=white)
 ![Dart](https://img.shields.io/badge/Dart-3.7+-0175C2?style=for-the-badge&logo=dart&logoColor=white)
@@ -25,25 +25,27 @@
 
 ### 🫀 Real-Time Heart Rate Streaming
 - Connects to the Colmi R02 via **Bluetooth Low Energy** using the proprietary Colmi UART protocol
-- Streams live BPM to the dashboard with a beautiful gradient area chart
-- Auto-scans on launch, auto-reconnects on disconnect
+- All-day continuous HR streaming with periodic 30-second keep-alive packets (`hrActionContinue`)
+- Sliding-window CRC resynchronization and exponential backoff auto-reconnect
+- Streams live BPM to the dashboard with a smooth gradient area chart
 
-### 📊 Calm Score Dashboard
-- Circular calm score ring with animated progress
-- Metric cards for HRV, body temperature, respiratory rate, and sleep
-- Frosted-glass bottom navigation bar with smooth transitions
+### 📊 Live Calm Score & Biometrics Dashboard
+- Circular Calm Score ring driven in real time by your heart rate relative to your resting baseline
+- Live metrics for Heart Rate, Calm Score, Baseline BPM, and daily Stress Spikes
+- Frosted-glass bottom navigation bar with lazy-mounted tabs and smooth transitions
 
-### 🔥 Stress Detection Algorithm
-- **Rolling 5-minute baseline** calculated from a circular buffer of HR samples
-- **Spike trigger**: HR ≥ baseline × 1.25 sustained for ≥ 2 consecutive minutes
-- **Calendar correlation**: Automatically queries your device calendar for the active meeting
-- **SQLite persistence**: Saves timestamp, peak HR, baseline, meeting title, and attendee list
+### 🔥 Stress Detection Algorithm v2
+- **Signal conditioning (`HrSignalFilter`)**: Rejects physiological outliers (< 38 or > 210 BPM), enforces a 6 BPM/s slew-rate cap, and applies a 5-point median + EWMA filter
+- **Spike-frozen baseline (`BaselineEstimator`)**: Tracks a 10-minute rolling **Median** and **Median Absolute Deviation (MAD)** and freezes updates while elevated so sustained spikes never self-contaminate your resting baseline
+- **Z-score & ratio scoring (`StressScorer`)**: Combines individualized robust z-score ($z \ge 2.2$) and relative ratio ($\ge 1.22\times$ baseline and $+14\text{ BPM}$) into a continuous 0–100 Stress & Calm Score
+- **Hysteresis state machine (`StressDetector`)**: Requires $\ge 2$ minutes with an **80% elevated duty cycle** (tolerating brief 1-sample dips) and enforces a 10-minute post-episode cooldown
 
-### 🏆 Coworker Stress Leaderboard
-- Aggregates stress events by meeting attendee
-- **Podium display** for the top 3 stress-inducing coworkers (🥇🥈🥉)
-- Ranked cards with initials avatars, spike counts, and average peak HR
-- Auto-refreshes when new stress events are detected
+### 🏆 Coworker Stress Leaderboard v2
+- **Live Meeting Session Tracker**: Start an active meeting session with tagged coworkers so any stress spike during the meeting is automatically attributed
+- **Manual Spike Tagging**: Retroactively tag untagged stress spikes or log manual spikes with saved coworker quick-chips
+- **Time Window Filters**: Switch between **7 Days**, **30 Days**, and **All Time** rankings
+- **Office-Safe Privacy Mode**: One-tap eye toggle masks coworker names to initials (`A.S.`) when sharing your screen
+- **Coworker Detail Sheet**: Tap any ranked coworker or podium spot to inspect their spike count, peak/average HR, average elevation (`+Δ BPM`), and meeting history
 
 ---
 
@@ -71,28 +73,29 @@ Spike follows a **premium dark-mode design language** with a deep palette and pa
 │  HeartRateCard · CalmRing · MetricCard                  │
 ├─────────────────────────────────────────────────────────┤
 │                    State Management                     │
-│         Riverpod Providers (ble · stress)               │
+│      Riverpod Providers (ble · stress · vitals)         │
 ├─────────────────────────────────────────────────────────┤
 │                      Services                           │
-│  BleService · StressAnalyzerService · CalendarService   │
-│  DatabaseService · ColmiProtocol                        │
+│  BleService · StressAnalyzerService · StressDetector    │
+│  DatabaseService · ColmiProtocol · CalendarService      │
 ├─────────────────────────────────────────────────────────┤
 │                      Platform                           │
-│  flutter_blue_plus · device_calendar · sqflite          │
+│           flutter_blue_plus · sqflite                   │
 └─────────────────────────────────────────────────────────┘
 ```
 
-### Stress Detection Flow
+### Stress Detection v2 Flow
 
 ```mermaid
 graph LR
-    A[R02 Ring] -->|BLE Notify| B[BleService]
-    B -->|Stream‹int›| C[StressAnalyzerService]
-    C -->|5-min rolling avg| D{HR ≥ 1.25× baseline<br/>for ≥ 2 min?}
-    D -->|Yes| E[CalendarService]
-    E -->|meeting + attendees| F[DatabaseService]
-    F -->|SQLite| G[LeaderboardScreen]
-    D -->|No| C
+    A["R02 Ring"] -->|BLE Notify| B["BleService"]
+    B -->|Stream int| C["HrSignalFilter"]
+    C -->|Median + EWMA| D["BaselineEstimator (Frozen on Spike)"]
+    D -->|Z-Score + Ratio| E{"80% Duty Cycle for >= 2 min?"}
+    E -->|Yes| F["Active Meeting / Manual Tag"]
+    F -->|Persist| G["DatabaseService (SQLite v2)"]
+    G -->|Reactive Stream| H["LeaderboardScreen"]
+    E -->|No| C
 ```
 
 ---
@@ -101,33 +104,45 @@ graph LR
 
 ```
 lib/
-├── main.dart                          # App entry, ProviderScope, MainShell
+├── main.dart                                # App entry, ProviderScope, lazy-mounted MainShell
 ├── models/
-│   ├── stress_event.dart              # StressEvent data model + SQLite serialization
-│   └── leaderboard_entry.dart         # Aggregated coworker ranking entry
+│   ├── stress_event.dart                    # StressEvent v2 model + SQLite serialization
+│   └── leaderboard_entry.dart               # Aggregated coworker ranking entry + period filter
 ├── providers/
-│   ├── ble_providers.dart             # BLE connection, HR stream, auto-scan
-│   └── stress_providers.dart          # Stress analyzer, DB, leaderboard providers
+│   ├── ble_providers.dart                   # BLE connection, HR stream, auto-scan
+│   ├── stress_providers.dart                # Stress analyzer, live telemetry, DB, leaderboard
+│   └── vitals_provider.dart                 # Real-time HR history & session stats
 ├── screens/
-│   ├── home_screen.dart               # Calm score dashboard with ring + metrics
-│   ├── vitals_screen.dart             # Heart rate & vital signs
-│   ├── sleep_screen.dart              # Sleep tracking view
-│   ├── activity_screen.dart           # Activity tracking view
-│   └── leaderboard_screen.dart        # Coworker stress leaderboard
+│   ├── home_screen.dart                     # Calm score dashboard with live ring + metrics
+│   ├── vitals_screen.dart                   # Real-time BLE heart rate & stress telemetry
+│   ├── vital_details_screen.dart            # Detailed heart rate trend chart & stats
+│   ├── sleep_screen.dart                    # Sleep tracking view
+│   ├── activity_screen.dart                 # Activity tracking view
+│   ├── leaderboard_screen.dart              # Coworker stress leaderboard v2 & tagging UI
+│   └── settings_screen.dart                 # BLE device manager & data reset controls
 ├── services/
-│   ├── ble_service.dart               # BLE scan, connect, packet buffer, auto-reconnect
-│   ├── colmi_protocol.dart            # Colmi R02 packet encoder/decoder + CRC
-│   ├── calendar_service.dart          # Device calendar with overlapping event merge
-│   ├── database_service.dart          # SQLite CRUD with Completer-based init
-│   └── stress_analyzer_service.dart   # Rolling baseline, spike detection, reentrance guard
+│   ├── ble_service.dart                     # BLE scan, connect, keep-alive, backoff reconnect
+│   ├── colmi_protocol.dart                  # Colmi R02 packet encoder/decoder + CRC resync
+│   ├── calendar_service.dart                # Manual meeting session context holder
+│   ├── database_service.dart                # SQLite v2 schema, normalized junction & directory
+│   ├── stress_analyzer_service.dart         # Coordinates v2 detector, meeting context, and DB
+│   └── stress/
+│       ├── hr_signal_filter.dart            # Outlier gate, slew-rate limiter, median + EWMA
+│       ├── baseline_estimator.dart          # Rolling 10-min Median + MAD (frozen on spikes)
+│       ├── stress_scorer.dart               # Z-score + relative elevation & Calm Score
+│       └── stress_detector.dart             # Hysteresis state machine & 80% duty-cycle check
 ├── theme/
-│   ├── app_colors.dart                # Spike dark palette + pastel accents
-│   └── app_theme.dart                 # Material theme configuration
+│   ├── app_colors.dart                      # Spike dark palette + pastel accents
+│   └── app_theme.dart                       # Material theme configuration
+├── utils/
+│   ├── app_logger.dart                      # Centralized structured debug logger
+│   ├── app_routes.dart                      # Shared slide-fade route transitions
+│   └── date_formatter.dart                  # Date and relative timestamp formatters
 └── widgets/
-    ├── bottom_nav_bar.dart            # Frosted-glass bottom navigation
-    ├── heart_rate_card.dart           # Live HR chart with connection status dot
-    ├── metric_card.dart               # Reusable metric display card
-    └── readiness_ring.dart            # Custom-painted circular calm score ring
+    ├── bottom_nav_bar.dart                  # Frosted-glass bottom navigation
+    ├── heart_rate_card.dart                 # Isolated live HR chart card
+    ├── metric_card.dart                     # Reusable metric display card
+    └── readiness_ring.dart                  # Custom-painted circular calm score ring
 ```
 
 ---
@@ -147,8 +162,10 @@ Spike implements the **reverse-engineered Colmi UART-over-BLE protocol** (not st
 ### Real-Time Heart Rate
 
 ```
-Send:    Cmd 105 [DataType=6 (RealtimeHR), Action=1 (Start)]
-Receive: Cmd  30 [byte[1] = heart rate BPM]
+Start:    Cmd 0x69 [Type=0x01 (HR), Action=0x01 (Start)]
+Continue: Cmd 0x69 [Type=0x01 (HR), Action=0x02 (Continue / Keep-Alive every 30s)]
+Stop:     Cmd 0x69 [Type=0x01 (HR), Action=0x00 (Stop)]
+Receive:  Cmd 0x69 [byte[1]=0x01, byte[2]=errorCode, byte[3]=BPM]
 ```
 
 > Protocol documentation: [colmi.puxtril.com](https://colmi.puxtril.com/commands/)
@@ -161,21 +178,18 @@ Receive: Cmd  30 [byte[1] = heart rate BPM]
 
 | Permission | Purpose |
 |---|---|
-| `BLUETOOTH_SCAN` | Discover nearby R02 ring |
+| `BLUETOOTH_SCAN` | Discover nearby R02 ring (`neverForLocation` on Android 12+) |
 | `BLUETOOTH_CONNECT` | Establish BLE connection |
-| `ACCESS_FINE_LOCATION` | Required for BLE scanning (Android 6-11) |
+| `ACCESS_FINE_LOCATION` | Required for BLE scanning on Android 6–11 (`maxSdkVersion="30"`) |
 | `FOREGROUND_SERVICE` | Keep BLE alive in background (API 34+) |
-| `FOREGROUND_SERVICE_CONNECTED_DEVICE` | Android 15 BLE background restriction |
-| `READ_CALENDAR` | Read meeting attendees for stress correlation |
+| `FOREGROUND_SERVICE_CONNECTED_DEVICE` | Android 14/15 BLE background service type |
 
 ### iOS
 
 | Key | Purpose |
 |---|---|
-| `NSBluetoothAlwaysUsageDescription` | BLE access |
-| `NSLocationWhenInUseUsageDescription` | BLE scanning requires location |
-| `NSCalendarsUsageDescription` | Calendar access (legacy) |
-| `NSCalendarsFullAccessUsageDescription` | Calendar + attendee access (iOS 17+) |
+| `NSBluetoothAlwaysUsageDescription` | BLE ring connection & background streaming |
+| `UIBackgroundModes: bluetooth-central` | Keep BLE notifications active in background |
 
 ---
 
@@ -192,8 +206,8 @@ Receive: Cmd  30 [byte[1] = heart rate BPM]
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/spike.git
-cd spike
+git clone https://github.com/Sujaya-Nimneth/SPIKE.git
+cd SPIKE
 
 # Install dependencies
 flutter pub get
@@ -210,7 +224,7 @@ flutter run
 # Static analysis
 flutter analyze
 
-# Run tests
+# Run unit and widget tests
 flutter test
 ```
 
@@ -223,46 +237,44 @@ flutter test
 | [`flutter_blue_plus`](https://pub.dev/packages/flutter_blue_plus) | ^1.35.2 | Bluetooth Low Energy communication |
 | [`flutter_riverpod`](https://pub.dev/packages/flutter_riverpod) | ^2.6.1 | Reactive state management |
 | [`fl_chart`](https://pub.dev/packages/fl_chart) | ^0.70.2 | Heart rate area chart visualization |
-| [`device_calendar`](https://pub.dev/packages/device_calendar) | ^4.3.3 | Local calendar event + attendee reading |
-| [`sqflite`](https://pub.dev/packages/sqflite) | ^2.4.2 | Local SQLite database for stress events |
+| [`sqflite`](https://pub.dev/packages/sqflite) | ^2.4.2 | Local SQLite database for stress events & leaderboard |
 | [`google_fonts`](https://pub.dev/packages/google_fonts) | ^6.2.1 | Inter font family for typography |
 
 ---
 
-## 🧠 How the Stress Algorithm Works
-
-```
-1. Collect HR samples into a 5-minute circular buffer
-2. Calculate rolling mean → this is the "baseline"
-3. If current HR ≥ baseline × 1.25 → start spike timer
-4. If spike persists ≥ 2 minutes continuously → STRESS EVENT
-5. Query device calendar for active meeting(s)
-6. Merge attendees from ALL overlapping events
-7. Save { timestamp, peakHR, baseline, meeting, attendees } → SQLite
-8. 5-minute cooldown before next event can fire
-```
-
-### Safeguards
-
-- **Connection gap detection**: If no HR sample for >10s, baseline buffer is flushed
-- **Reentrance guard**: Prevents duplicate events during async calendar/DB operations
-- **MTU packet buffering**: Handles fragmented BLE payloads across notifications
-- **CRC validation**: Rejects corrupted packets before parsing
-- **Auto-reconnect**: 3-second delay then re-scans after unexpected disconnect
-
----
-
-## 🗄️ Database Schema
+## 🗄️ Database Schema (v2)
 
 ```sql
 CREATE TABLE stress_events (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp        TEXT NOT NULL,       -- ISO 8601
-    peak_hr          INTEGER NOT NULL,    -- Maximum HR during spike
-    baseline_hr      INTEGER NOT NULL,    -- Rolling average at trigger
-    meeting_title    TEXT,                -- From calendar (nullable)
-    attendees        TEXT,                -- JSON array: ["Alice", "Bob"]
-    duration_seconds INTEGER NOT NULL     -- Spike duration in seconds
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp          TEXT NOT NULL,
+    peak_hr            INTEGER NOT NULL,
+    avg_hr             REAL NOT NULL DEFAULT 0,
+    baseline_hr        INTEGER NOT NULL,
+    baseline_mad       REAL NOT NULL DEFAULT 3.0,
+    stress_score       REAL NOT NULL DEFAULT 60.0,
+    z_score            REAL NOT NULL DEFAULT 2.2,
+    area_over_baseline REAL NOT NULL DEFAULT 0.0,
+    meeting_title      TEXT,
+    attendees          TEXT,
+    duration_seconds   INTEGER NOT NULL,
+    source             TEXT NOT NULL DEFAULT 'auto'
+);
+
+CREATE TABLE stress_event_attendees (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id          INTEGER NOT NULL,
+    coworker_name     TEXT NOT NULL,
+    normalized_name   TEXT NOT NULL,
+    elevated_delta_hr REAL NOT NULL DEFAULT 0,
+    stress_score      REAL NOT NULL DEFAULT 60.0
+);
+
+CREATE TABLE coworker_directory (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    display_name    TEXT NOT NULL,
+    normalized_name TEXT NOT NULL UNIQUE,
+    created_at      TEXT NOT NULL
 );
 ```
 

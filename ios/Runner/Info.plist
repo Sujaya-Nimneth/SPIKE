@@ -68,16 +68,15 @@
 	</array>
 	<!-- ═══ Bluetooth LE (flutter_blue_plus) ═══ -->
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Spike uses Bluetooth to connect to and communicate with your ring device.</string>
+	<string>Spike uses Bluetooth to connect to your Colmi R02 smart ring and stream continuous heart rate data for stress detection.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>Spike uses Bluetooth to connect to and communicate with your ring device.</string>
+	<string>Spike uses Bluetooth to connect to your Colmi R02 smart ring and stream continuous heart rate data for stress detection.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>bluetooth-central</string>
+	</array>
 	<!-- Location — required for BLE scanning on iOS -->
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Spike needs your location to discover nearby Bluetooth devices.</string>
-	<!-- ═══ Calendar (device_calendar) ═══ -->
-	<key>NSCalendarsUsageDescription</key>
-	<string>Spike reads your calendar to display upcoming events on your dashboard.</string>
-	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>Spike reads your calendar to display upcoming events on your dashboard.</string>
 </dict>
 </plist>

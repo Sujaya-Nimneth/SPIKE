@@ -1,94 +1,72 @@
 import 'dart:async';
-import 'dart:collection';
 import '../models/stress_event.dart';
+import '../utils/app_logger.dart';
 import 'calendar_service.dart';
 import 'database_service.dart';
+import 'stress/stress_detector.dart';
 
-/// Analyzes heart rate data to detect stress events and correlate them
-/// with active calendar meetings.
+/// Orchestrates real-time heart rate stress analysis using the v2
+/// [StressDetector] pipeline and persists detected episodes to [DatabaseService].
 ///
-/// Algorithm:
-/// 1. Maintains a rolling 5-minute window of HR samples (baseline).
-/// 2. If current HR ≥ baseline × 1.25 for ≥ 2 consecutive minutes,
-///    flags a "Stress Event".
-/// 3. Queries the device calendar for the currently active meeting.
-/// 4. Saves the event (timestamp, peak HR, meeting, attendees) to SQLite.
+/// Pipeline:
+/// 1. [HrSignalFilter]: range validation (35–210 BPM), slew-rate artifact
+///    rejection, and 5-sample median smoothing.
+/// 2. [BaselineEstimator]: 10-minute rolling median + MAD baseline that
+///    freezes updates during elevated HR so spikes never self-contaminate.
+/// 3. [StressScorer]: z-score + ratio evaluation and EMA-smoothed Calm Score.
+/// 4. [StressDetector]: hysteresis state machine requiring >= 80% elevated
+///    duty cycle over 2 minutes before confirming a stress episode.
 class StressAnalyzerService {
+  static const _tag = 'StressAnalyzer';
+
   final CalendarService _calendarService;
   final DatabaseService _databaseService;
+  final StressDetector _detector;
 
   StressAnalyzerService({
     required CalendarService calendarService,
     required DatabaseService databaseService,
+    StressDetector? detector,
   })  : _calendarService = calendarService,
-        _databaseService = databaseService;
+        _databaseService = databaseService,
+        _detector = detector ?? StressDetector();
 
-  // ── Configuration ───────────────────────────────────────────
-
-  /// Duration of the rolling baseline window.
-  static const baselineWindow = Duration(minutes: 5);
-
-  /// Spike threshold: current HR must be ≥ baseline × this factor.
-  static const spikeThreshold = 1.25;
-
-  /// How long the spike must be sustained before triggering an event.
-  static const spikeDuration = Duration(minutes: 2);
-
-  /// Cooldown period after a stress event before a new one can fire.
-  static const cooldownDuration = Duration(minutes: 5);
-
-  /// Maximum gap between samples before flushing the baseline buffer.
-  /// If no HR sample arrives within this duration, the ring likely
-  /// disconnected and the baseline data is stale.
-  static const maxSampleGap = Duration(seconds: 10);
-
-  // ── State ───────────────────────────────────────────────────
-
-  /// Circular buffer of (timestamp, hr) pairs for rolling baseline.
-  final Queue<_HrSample> _baselineBuffer = Queue();
-
-  /// When the current spike started (null = no active spike).
-  DateTime? _spikeStartTime;
-
-  /// Peak HR observed during the current spike.
-  int _currentPeakHr = 0;
-
-  /// When the last stress event was recorded (for cooldown).
-  DateTime? _lastEventTime;
-
-  /// Stream controller for emitting stress events to the UI.
   final _eventController = StreamController<StressEvent>.broadcast();
+  final _calmScoreController = StreamController<int>.broadcast();
+  final _phaseController = StreamController<StressDetectionPhase>.broadcast();
 
-  /// Whether the analyzer is actively processing HR data.
   bool _isRunning = false;
-
-  /// Reentrance guard to prevent duplicate stress events.
-  ///
-  /// Since `_triggerStressEvent` is async (awaits calendar + DB) but
-  /// `_onHeartRateReceived` is called synchronously on each HR sample,
-  /// without this guard the trigger could fire multiple times while
-  /// the first invocation is still in-flight.
   bool _isTriggering = false;
+  int _lastEmittedCalmScore = 88;
+  StressDetectionPhase _lastEmittedPhase = StressDetectionPhase.warmingUp;
 
   StreamSubscription<int>? _hrSubscription;
 
   // ── Public API ──────────────────────────────────────────────
 
-  /// Stream of detected stress events.
+  /// Stream of newly detected and persisted stress events.
   Stream<StressEvent> get stressEventStream => _eventController.stream;
 
-  /// Whether the analyzer is currently running.
+  /// Stream of live Calm Score updates (0–100, default 88).
+  Stream<int> get calmScoreStream => _calmScoreController.stream;
+
+  /// Stream of detector phase transitions.
+  Stream<StressDetectionPhase> get phaseStream => _phaseController.stream;
+
+  /// Whether the analyzer is actively subscribed to a heart rate stream.
   bool get isRunning => _isRunning;
 
-  /// The current rolling baseline HR, or null if insufficient data.
-  double? get currentBaseline {
-    if (_baselineBuffer.isEmpty) return null;
-    final sum = _baselineBuffer.fold<int>(0, (s, sample) => s + sample.hr);
-    return sum / _baselineBuffer.length;
-  }
+  /// Current rolling median baseline HR, or `null` while warming up.
+  double? get currentBaseline => _detector.currentBaseline;
 
-  /// Whether a spike is currently being tracked.
-  bool get isSpiking => _spikeStartTime != null;
+  /// Current smoothed Calm Score (0–100).
+  int get currentCalmScore => _detector.calmScore;
+
+  /// Current phase of the stress detector state machine.
+  StressDetectionPhase get currentPhase => _detector.phase;
+
+  /// Whether an elevation or confirmed spike is currently active.
+  bool get isSpiking => _detector.isSpiking;
 
   /// Start listening to a heart rate stream.
   void start(Stream<int> heartRateStream) {
@@ -97,11 +75,13 @@ class StressAnalyzerService {
 
     _hrSubscription = heartRateStream.listen(
       _onHeartRateReceived,
-      onError: (_) {}, // Silently ignore stream errors
+      onError: (Object err) {
+        AppLogger.warn(_tag, 'HR stream error', err);
+      },
     );
   }
 
-  /// Stop the analyzer and clean up.
+  /// Stop the analyzer subscription.
   void stop() {
     _isRunning = false;
     _hrSubscription?.cancel();
@@ -112,82 +92,39 @@ class StressAnalyzerService {
   void dispose() {
     stop();
     _eventController.close();
-    _baselineBuffer.clear();
+    _calmScoreController.close();
+    _phaseController.close();
   }
 
-  // ── Core Algorithm ──────────────────────────────────────────
+  // ── Core Processing ─────────────────────────────────────────
 
   void _onHeartRateReceived(int hr) {
-    final now = DateTime.now();
+    final episode = _detector.processSample(hr);
 
-    // Detect connection gaps: if last sample was >10 seconds ago,
-    // the ring likely disconnected. Flush the buffer to prevent
-    // stale data from poisoning the baseline.
-    if (_baselineBuffer.isNotEmpty) {
-      final lastSampleTime = _baselineBuffer.last.timestamp;
-      if (now.difference(lastSampleTime) > maxSampleGap) {
-        _baselineBuffer.clear();
-        _spikeStartTime = null;
-        _currentPeakHr = 0;
-      }
+    // Broadcast Calm Score changes
+    final newCalm = _detector.calmScore;
+    if (newCalm != _lastEmittedCalmScore && !_calmScoreController.isClosed) {
+      _lastEmittedCalmScore = newCalm;
+      _calmScoreController.add(newCalm);
     }
 
-    // 1. Add to baseline buffer
-    _baselineBuffer.add(_HrSample(timestamp: now, hr: hr));
-
-    // 2. Trim samples outside the 5-minute window
-    final cutoff = now.subtract(baselineWindow);
-    while (_baselineBuffer.isNotEmpty &&
-        _baselineBuffer.first.timestamp.isBefore(cutoff)) {
-      _baselineBuffer.removeFirst();
+    // Broadcast phase transitions
+    final newPhase = _detector.phase;
+    if (newPhase != _lastEmittedPhase && !_phaseController.isClosed) {
+      _lastEmittedPhase = newPhase;
+      _phaseController.add(newPhase);
     }
 
-    // 3. Need at least 30 seconds of data for a meaningful baseline
-    if (_baselineBuffer.length < 30) return;
-
-    // 4. Calculate rolling average (baseline)
-    final baseline = currentBaseline!;
-
-    // 5. Check if current HR is a spike (≥ 25% above baseline)
-    final threshold = baseline * spikeThreshold;
-
-    if (hr >= threshold) {
-      // Spike detected — start or continue tracking
-      _spikeStartTime ??= now;
-      if (hr > _currentPeakHr) _currentPeakHr = hr;
-
-      // 6. Check if spike has been sustained for ≥ 2 minutes
-      //    AND no trigger is currently in-flight (reentrance guard)
-      final spikeElapsed = now.difference(_spikeStartTime!);
-      if (spikeElapsed >= spikeDuration && !_isTriggering) {
-        _triggerStressEvent(now, baseline);
-      }
-    } else {
-      // HR dropped below threshold — reset spike tracking
-      _spikeStartTime = null;
-      _currentPeakHr = 0;
+    if (episode != null && !_isTriggering) {
+      unawaited(_persistDetectedEpisode(episode));
     }
   }
 
-  /// Trigger a stress event: query calendar, save to DB, emit to stream.
-  ///
-  /// Protected by [_isTriggering] reentrance guard to prevent duplicate
-  /// events when multiple HR samples arrive while the async calendar
-  /// query and DB insert are in-flight.
-  Future<void> _triggerStressEvent(DateTime now, double baseline) async {
+  Future<void> _persistDetectedEpisode(DetectedStressEpisode episode) async {
     if (_isTriggering) return;
     _isTriggering = true;
 
     try {
-      // Cooldown check: don't fire again within 5 minutes
-      if (_lastEventTime != null &&
-          now.difference(_lastEventTime!) < cooldownDuration) {
-        return;
-      }
-
-      _lastEventTime = now;
-
-      // Query the calendar for the active meeting(s)
       String? meetingTitle;
       List<String> attendees = [];
 
@@ -197,49 +134,39 @@ class StressAnalyzerService {
           meetingTitle = meeting.title;
           attendees = meeting.attendees;
         }
-      } catch (_) {
-        // Calendar access might fail — continue without meeting info
+      } catch (e) {
+        AppLogger.warn(_tag, 'Failed to read active meeting session', e);
       }
 
-      // Calculate spike duration
-      final duration = _spikeStartTime != null
-          ? now.difference(_spikeStartTime!).inSeconds
-          : spikeDuration.inSeconds;
-
-      // Build the stress event
       final event = StressEvent(
-        timestamp: now,
-        peakHr: _currentPeakHr,
-        baselineHr: baseline.round(),
+        timestamp: episode.timestamp,
+        peakHr: episode.peakHr,
+        meanHr: episode.meanHr,
+        baselineHr: episode.baselineHr,
         meetingTitle: meetingTitle,
         attendees: attendees,
-        durationSeconds: duration,
+        durationSeconds: episode.durationSeconds,
+        stressLoad: episode.stressLoad,
+        label: attendees.isNotEmpty
+            ? StressEventLabel.confirmed
+            : StressEventLabel.unconfirmed,
       );
 
-      // Save to SQLite
+      int? insertedId;
       try {
-        await _databaseService.insertStressEvent(event);
-      } catch (_) {
-        // DB write failure shouldn't crash the analyzer
+        insertedId = await _databaseService.insertStressEvent(event);
+      } catch (e) {
+        AppLogger.error(_tag, 'Failed to insert stress event into SQLite', e);
       }
 
-      // Emit to the stream for UI (guard against closed controller)
+      final savedEvent =
+          insertedId != null ? event.copyWith(id: insertedId) : event;
+
       if (!_eventController.isClosed) {
-        _eventController.add(event);
+        _eventController.add(savedEvent);
       }
     } finally {
-      // Always release the reentrance guard and reset spike tracking
       _isTriggering = false;
-      _spikeStartTime = null;
-      _currentPeakHr = 0;
     }
   }
-}
-
-/// A single heart rate sample with its timestamp.
-class _HrSample {
-  final DateTime timestamp;
-  final int hr;
-
-  const _HrSample({required this.timestamp, required this.hr});
 }
