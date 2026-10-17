@@ -1,54 +1,81 @@
-/// Service for reading local calendar events from the device.
+import 'dart:async';
+
+/// Manages active manual meeting context for stress event correlation.
 ///
-/// Used by the StressAnalyzerService to find the currently active meeting
-/// when a stress event triggers.
-///
-/// NOTE: The `device_calendar` plugin has been removed due to AGP 9
-/// incompatibility. This is a no-op stub that preserves the public API.
-/// Replace with a modern calendar plugin when one becomes available.
+/// Since Spike uses privacy-first manual tagging (no device calendar
+/// permissions required), users can optionally start an active meeting
+/// session with selected coworkers—or tag coworkers on detected stress
+/// events after the fact.
 class CalendarService {
-  /// Singleton instance.
-  static final CalendarService _instance = CalendarService._internal();
-  factory CalendarService() => _instance;
-  CalendarService._internal();
+  CalendarService();
 
-  // ── Permissions ─────────────────────────────────────────────
+  CurrentMeeting? _activeMeeting;
+  final _meetingController = StreamController<CurrentMeeting?>.broadcast();
 
-  /// Request calendar read permissions from the user.
-  Future<bool> requestPermissions() async => false;
+  /// Stream of active manual meeting changes.
+  Stream<CurrentMeeting?> get activeMeetingStream => _meetingController.stream;
 
-  /// Check whether calendar permissions have been granted.
-  Future<bool> hasPermissions() async => false;
+  /// Currently active manual meeting session, if any.
+  CurrentMeeting? get activeMeeting => _activeMeeting;
 
-  // ── Calendars ───────────────────────────────────────────────
-
-  /// Retrieve all calendars available on the device.
-  Future<List<dynamic>> getCalendars() async => [];
-
-  // ── Events ──────────────────────────────────────────────────
-
-  /// Fetch events from a specific calendar within a date range.
-  Future<List<dynamic>> getEvents(
-    String calendarId, {
-    required DateTime start,
-    required DateTime end,
-  }) async => [];
-
-  /// Fetch today's events from all calendars.
-  Future<List<dynamic>> getTodayEvents() async => [];
-
-  /// Fetch upcoming events for the next N days across all calendars.
-  Future<List<dynamic>> getUpcomingEvents({int days = 7}) async => [];
-
-  // ── Meeting Lookup (used by StressAnalyzer) ─────────────────
-
-  /// Find ALL currently active meetings and merge their attendees.
+  /// Start a live meeting session with the specified [attendees] and optional [title].
   ///
-  /// Returns `null` — calendar integration is currently disabled.
-  Future<CurrentMeeting?> getCurrentMeeting() async => null;
+  /// Any stress episode detected while this session is active will automatically
+  /// be tagged with these coworkers.
+  CurrentMeeting startMeetingSession({
+    required List<String> attendees,
+    String? title,
+    Duration maxDuration = const Duration(hours: 2),
+  }) {
+    final now = DateTime.now();
+    final cleanAttendees = attendees
+        .map((a) => a.trim())
+        .where((a) => a.isNotEmpty)
+        .toSet()
+        .toList();
+
+    final meetingTitle = (title == null || title.trim().isEmpty)
+        ? 'Meeting with ${cleanAttendees.join(', ')}'
+        : title.trim();
+
+    _activeMeeting = CurrentMeeting(
+      title: meetingTitle,
+      attendees: cleanAttendees,
+      start: now,
+      end: now.add(maxDuration),
+    );
+
+    if (!_meetingController.isClosed) {
+      _meetingController.add(_activeMeeting);
+    }
+    return _activeMeeting!;
+  }
+
+  /// End the currently active manual meeting session.
+  void endMeetingSession() {
+    _activeMeeting = null;
+    if (!_meetingController.isClosed) {
+      _meetingController.add(null);
+    }
+  }
+
+  /// Returns the currently active meeting session if it has not expired.
+  Future<CurrentMeeting?> getCurrentMeeting() async {
+    final current = _activeMeeting;
+    if (current == null) return null;
+    if (DateTime.now().isAfter(current.end)) {
+      endMeetingSession();
+      return null;
+    }
+    return current;
+  }
+
+  void dispose() {
+    _meetingController.close();
+  }
 }
 
-/// A snapshot of the currently active meeting(s).
+/// A snapshot of an active meeting session and its tagged coworkers.
 class CurrentMeeting {
   final String title;
   final List<String> attendees;
@@ -63,6 +90,5 @@ class CurrentMeeting {
   });
 
   @override
-  String toString() =>
-      'CurrentMeeting($title, attendees: $attendees)';
+  String toString() => 'CurrentMeeting($title, attendees: $attendees)';
 }
