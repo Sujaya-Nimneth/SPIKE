@@ -115,12 +115,29 @@ class ColmiPacket {
 
   /// Build a packet to start real-time heart rate streaming.
   static List<int> startRealtimeHeartRate() {
-    return buildDataRequest(ColmiDataType.realtimeHeartRate, ColmiDataAction.start);
+    return buildDataRequest(
+      ColmiDataType.realtimeHeartRate,
+      ColmiDataAction.start,
+    );
+  }
+
+  /// Build a keep-alive packet to continue real-time heart rate streaming.
+  ///
+  /// The Colmi R02 firmware automatically stops the real-time optical sensor
+  /// after ~30 seconds unless periodic continue (action = 3) packets are sent.
+  static List<int> continueRealtimeHeartRate() {
+    return buildDataRequest(
+      ColmiDataType.realtimeHeartRate,
+      ColmiDataAction.resume,
+    );
   }
 
   /// Build a packet to stop real-time heart rate streaming.
   static List<int> stopRealtimeHeartRate() {
-    return buildDataRequest(ColmiDataType.realtimeHeartRate, ColmiDataAction.stop);
+    return buildDataRequest(
+      ColmiDataType.realtimeHeartRate,
+      ColmiDataAction.stop,
+    );
   }
 
   /// Build a battery status request packet (Command ID 3).
@@ -151,23 +168,58 @@ class ColmiParser {
     if (packet.length < 16) return false;
     int sum = 0;
     for (int i = 0; i < 15; i++) {
-      sum += packet[i];
+      sum += packet[i] & 0xFF;
     }
-    return (sum & 0xFF) == packet[15];
+    return (sum & 0xFF) == (packet[15] & 0xFF);
   }
 
-  /// Parse a real-time heart rate response (Command ID 30).
+  /// Extracts all valid 16-byte packets from [buffer], mutating [buffer] in place.
+  ///
+  /// Uses 1-byte sliding-window resynchronization when a CRC check fails so a
+  /// single dropped or stray byte does not permanently misalign all future frames.
+  static List<List<int>> extractValidPackets(List<int> buffer) {
+    final validPackets = <List<int>>[];
+
+    while (buffer.length >= 16) {
+      final candidate = buffer.sublist(0, 16);
+      if (isValidCrc(candidate)) {
+        buffer.removeRange(0, 16);
+        validPackets.add(candidate);
+      } else {
+        // Shift by 1 byte to resynchronize with the next valid frame boundary.
+        buffer.removeAt(0);
+      }
+    }
+
+    return validPackets;
+  }
+
+  /// Parse a real-time heart rate response (Command ID 30) or DataRequest
+  /// real-time HR notification (Command ID 105 with DataType 6).
   ///
   /// Returns the heart rate in BPM, or `null` if the packet is not
   /// a valid real-time HR response or the HR value is 0 (sensor warming up).
   static int? parseRealtimeHeartRate(List<int> packet) {
     if (packet.length < 16) return null;
-    if (commandId(packet) != ColmiCommandId.realtimeHeartRate) return null;
     if (isError(packet)) return null;
 
-    final hr = packet[1];
-    // HR of 0 means the sensor is still warming up
-    return hr > 0 ? hr : null;
+    final cmd = commandId(packet);
+    int hr = 0;
+
+    if (cmd == ColmiCommandId.realtimeHeartRate) {
+      hr = packet[1] & 0xFF;
+    } else if (cmd == ColmiCommandId.dataRequest &&
+        (packet[1] & 0xFF) == ColmiDataType.realtimeHeartRate.value) {
+      // Some R02 firmware revisions report real-time HR on Cmd 105 [6, err, bpm]
+      final errCode = packet[2] & 0xFF;
+      if (errCode != 0) return null;
+      hr = packet[3] & 0xFF;
+    } else {
+      return null;
+    }
+
+    // HR of 0 means the sensor is still warming up; >220 is out of range
+    return (hr > 0 && hr <= 220) ? hr : null;
   }
 
   /// Parse a battery response (Command ID 3).
@@ -179,7 +231,7 @@ class ColmiParser {
     if (isError(packet)) return null;
 
     return (
-      percent: packet[1],
+      percent: (packet[1] & 0xFF).clamp(0, 100),
       isCharging: packet[2] != 0,
     );
   }
