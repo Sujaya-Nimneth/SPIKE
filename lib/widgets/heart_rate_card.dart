@@ -1,51 +1,63 @@
+import 'dart:math';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/ble_providers.dart';
+import '../providers/vitals_provider.dart';
 import '../services/ble_service.dart';
 import '../theme/app_colors.dart';
+import '../utils/app_routes.dart';
 import '../screens/vital_details_screen.dart';
 
 /// A dark-themed heart rate chart card using fl_chart.
 ///
-/// Displays a gradient-filled area chart with pastel coral styling.
-/// The BPM badge shows live data from the connected ring via Riverpod.
-class HeartRateCard extends ConsumerWidget {
+/// Isolates live BPM header rebuilds from the chart and renders live
+/// scrolling samples when streaming from the ring.
+class HeartRateCard extends StatelessWidget {
   const HeartRateCard({super.key});
 
+  static const List<FlSpot> _default24hSpots = [
+    FlSpot(0, 62),
+    FlSpot(1, 58),
+    FlSpot(2, 55),
+    FlSpot(3, 54),
+    FlSpot(4, 56),
+    FlSpot(5, 52),
+    FlSpot(6, 58),
+    FlSpot(7, 65),
+    FlSpot(8, 72),
+    FlSpot(9, 78),
+    FlSpot(10, 82),
+    FlSpot(11, 76),
+    FlSpot(12, 80),
+    FlSpot(13, 85),
+    FlSpot(14, 78),
+    FlSpot(15, 74),
+    FlSpot(16, 70),
+    FlSpot(17, 76),
+    FlSpot(18, 82),
+    FlSpot(19, 79),
+    FlSpot(20, 75),
+    FlSpot(21, 70),
+    FlSpot(22, 65),
+    FlSpot(23, 62),
+  ];
+
+  static const List<String> _timeLabels = [
+    '12 AM',
+    '6 AM',
+    '12 PM',
+    '6 PM',
+    'Now',
+  ];
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    // Watch the latest heart rate value from the ring
-    final latestHr = ref.watch(latestHeartRateProvider);
-
-    // Watch connection state for the status indicator
-    final connectionAsync = ref.watch(bleConnectionStateProvider);
-    final connectionState = connectionAsync.valueOrNull ??
-        BleConnectionState.disconnected;
-
-    // Display value: live HR if available, otherwise fallback to static
-    final displayHr = latestHr ?? 72;
-
+  Widget build(BuildContext context) {
     return GestureDetector(
       onTap: () {
         Navigator.of(context).push(
-          PageRouteBuilder(
-            pageBuilder: (context, animation, secondaryAnimation) => const VitalDetailsScreen(vitalType: VitalType.heartRate),
-            transitionsBuilder: (context, animation, secondaryAnimation, child) {
-              return SlideTransition(
-                position: Tween<Offset>(
-                  begin: const Offset(0.0, 0.15),
-                  end: Offset.zero,
-                ).animate(CurvedAnimation(
-                  parent: animation,
-                  curve: Curves.easeOutCubic,
-                )),
-                child: FadeTransition(
-                  opacity: animation,
-                  child: child,
-                ),
-              );
-            },
+          AppRoutes.fadeSlideUp(
+            const VitalDetailsScreen(vitalType: VitalType.heartRate),
           ),
         );
       },
@@ -62,100 +74,21 @@ class HeartRateCard extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header row
-            Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color: AppColors.pastelCoral.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(11),
-                  ),
-                  child: const Icon(
-                    Icons.favorite_rounded,
-                    color: AppColors.pastelCoral,
-                    size: 20,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Text(
-                            'Heart Rate',
-                            style: Theme.of(context).textTheme.headlineSmall,
-                          ),
-                          const SizedBox(width: 8),
-                          // Connection status dot
-                          _ConnectionDot(state: connectionState),
-                        ],
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        latestHr != null ? 'Live from R02' : 'Last 24 hours',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: latestHr != null
-                                  ? AppColors.pastelSage
-                                  : AppColors.textTertiary,
-                            ),
-                      ),
-                    ],
-                  ),
-                ),
-                // BPM badge
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: AppColors.pastelCoral.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(20),
-                    border: latestHr != null
-                        ? Border.all(
-                            color: AppColors.pastelCoral.withValues(alpha: 0.3),
-                            width: 0.5,
-                          )
-                        : null,
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        '$displayHr',
-                        style:
-                            Theme.of(context).textTheme.headlineSmall?.copyWith(
-                                  color: AppColors.pastelCoral,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        'bpm',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: AppColors.pastelCoral.withValues(alpha: 0.7),
-                              fontSize: 11,
-                            ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+            // Isolated header row that updates on BPM / connection changes
+            const _HeartRateHeaderRow(),
             const SizedBox(height: 24),
-            // Chart
-            SizedBox(
-              height: 160,
-              child: _buildChart(),
+            // Chart wrapped in RepaintBoundary
+            const RepaintBoundary(
+              child: SizedBox(
+                height: 160,
+                child: _HeartRateChartBody(),
+              ),
             ),
             const SizedBox(height: 12),
             // Time labels
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: ['12 AM', '6 AM', '12 PM', '6 PM', 'Now']
+              children: _timeLabels
                   .map(
                     (t) => Text(
                       t,
@@ -172,35 +105,125 @@ class HeartRateCard extends ConsumerWidget {
       ),
     );
   }
+}
 
-  Widget _buildChart() {
-    // Static heart-rate-like data points (chart data stays static for now)
-    final spots = <FlSpot>[
-      const FlSpot(0, 62),
-      const FlSpot(1, 58),
-      const FlSpot(2, 55),
-      const FlSpot(3, 54),
-      const FlSpot(4, 56),
-      const FlSpot(5, 52),
-      const FlSpot(6, 58),
-      const FlSpot(7, 65),
-      const FlSpot(8, 72),
-      const FlSpot(9, 78),
-      const FlSpot(10, 82),
-      const FlSpot(11, 76),
-      const FlSpot(12, 80),
-      const FlSpot(13, 85),
-      const FlSpot(14, 78),
-      const FlSpot(15, 74),
-      const FlSpot(16, 70),
-      const FlSpot(17, 76),
-      const FlSpot(18, 82),
-      const FlSpot(19, 79),
-      const FlSpot(20, 75),
-      const FlSpot(21, 70),
-      const FlSpot(22, 65),
-      const FlSpot(23, 62),
-    ];
+class _HeartRateHeaderRow extends ConsumerWidget {
+  const _HeartRateHeaderRow();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final latestHr = ref.watch(latestHeartRateProvider);
+    final connectionAsync = ref.watch(bleConnectionStateProvider);
+    final connectionState =
+        connectionAsync.valueOrNull ?? BleConnectionState.disconnected;
+    final displayHr = latestHr ?? 72;
+
+    return Row(
+      children: [
+        Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: AppColors.pastelCoral.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(11),
+          ),
+          child: const Icon(
+            Icons.favorite_rounded,
+            color: AppColors.pastelCoral,
+            size: 20,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Text(
+                    'Heart Rate',
+                    style: Theme.of(context).textTheme.headlineSmall,
+                  ),
+                  const SizedBox(width: 8),
+                  _ConnectionDot(state: connectionState),
+                ],
+              ),
+              const SizedBox(height: 2),
+              Text(
+                latestHr != null ? 'Live from R02' : 'Last 24 hours',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: latestHr != null
+                          ? AppColors.pastelSage
+                          : AppColors.textTertiary,
+                    ),
+              ),
+            ],
+          ),
+        ),
+        // BPM badge
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: AppColors.pastelCoral.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(20),
+            border: latestHr != null
+                ? Border.all(
+                    color: AppColors.pastelCoral.withValues(alpha: 0.3),
+                    width: 0.5,
+                  )
+                : null,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '$displayHr',
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      color: AppColors.pastelCoral,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                    ),
+              ),
+              const SizedBox(width: 4),
+              Text(
+                'bpm',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: AppColors.pastelCoral.withValues(alpha: 0.7),
+                      fontSize: 11,
+                    ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _HeartRateChartBody extends ConsumerWidget {
+  const _HeartRateChartBody();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final history =
+        ref.watch(liveVitalsProvider.select((s) => s.heartRateHistory));
+
+    final List<FlSpot> spots;
+    double minY = 40;
+    double maxY = 100;
+
+    if (history.length >= 2) {
+      spots = List.generate(history.length, (i) {
+        return FlSpot(i.toDouble(), history[i].value);
+      });
+      final ys = history.map((e) => e.value);
+      final lo = ys.reduce(min);
+      final hi = ys.reduce(max);
+      minY = (lo - 10).clamp(35.0, 90.0);
+      maxY = (hi + 10).clamp(minY + 20.0, 200.0);
+    } else {
+      spots = HeartRateCard._default24hSpots;
+    }
 
     return LineChart(
       LineChartData(
@@ -208,7 +231,7 @@ class HeartRateCard extends ConsumerWidget {
           show: true,
           drawVerticalLine: false,
           horizontalInterval: 20,
-          getDrawingHorizontalLine: (value) => FlLine(
+          getDrawingHorizontalLine: (value) => const FlLine(
             color: AppColors.surfaceVariant,
             strokeWidth: 0.5,
           ),
@@ -216,9 +239,9 @@ class HeartRateCard extends ConsumerWidget {
         titlesData: const FlTitlesData(show: false),
         borderData: FlBorderData(show: false),
         minX: 0,
-        maxX: 23,
-        minY: 40,
-        maxY: 100,
+        maxX: (spots.length - 1).toDouble().clamp(1.0, 30.0),
+        minY: minY,
+        maxY: maxY,
         lineTouchData: LineTouchData(
           enabled: true,
           touchTooltipData: LineTouchTooltipData(
