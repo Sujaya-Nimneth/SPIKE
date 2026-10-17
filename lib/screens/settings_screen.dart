@@ -59,13 +59,13 @@ class SettingsScreen extends ConsumerWidget {
     );
 
     if (confirmed == true) {
-      await ref.read(stressAnalyzerServiceProvider).endMeetingSession();
+      ref.read(activeMeetingProvider.notifier).endSession();
       await ref.read(databaseServiceProvider).clearAll();
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Stress events and leaderboard data cleared.'),
-            backgroundColor: AppColors.surfaceElevated,
+            backgroundColor: AppColors.surfaceVariant,
           ),
         );
       }

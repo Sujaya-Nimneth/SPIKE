@@ -515,7 +515,7 @@ class DatabaseService {
       GROUP BY a.coworker_name
       ORDER BY spike_count DESC, avg_peak_hr DESC
       ''',
-      if (cutoff != null) [cutoff],
+      cutoff != null ? [cutoff] : null,
     );
 
     return rows.map((row) => LeaderboardEntry.fromMap(row)).toList();
