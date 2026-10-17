@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../theme/app_colors.dart';
 import '../providers/ble_providers.dart';
+import '../providers/stress_providers.dart';
 import '../providers/vitals_provider.dart';
 import '../services/ble_service.dart';
+import '../utils/date_formatter.dart';
 
 enum VitalType {
   heartRate,
@@ -27,9 +29,10 @@ class VitalDetailsScreen extends ConsumerStatefulWidget {
   ConsumerState<VitalDetailsScreen> createState() => _VitalDetailsScreenState();
 }
 
-class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen> with SingleTickerProviderStateMixin {
+class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
+    with SingleTickerProviderStateMixin {
   bool _isWeekly = false;
-  late AnimationController _pulseController;
+  late final AnimationController _pulseController;
 
   @override
   void initState() {
@@ -37,7 +40,19 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen> with Si
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
-    )..repeat();
+    );
+  }
+
+  void _syncPulseAnimation(BleConnectionState state) {
+    final shouldPulse = state == BleConnectionState.connected ||
+        state == BleConnectionState.scanning ||
+        state == BleConnectionState.connecting;
+    if (shouldPulse && !_pulseController.isAnimating) {
+      _pulseController.repeat();
+    } else if (!shouldPulse && _pulseController.isAnimating) {
+      _pulseController.stop();
+      _pulseController.reset();
+    }
   }
 
   @override
@@ -50,14 +65,18 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen> with Si
   Widget build(BuildContext context) {
     // Watch connection state
     final connectionAsync = ref.watch(bleConnectionStateProvider);
-    final connectionState = connectionAsync.valueOrNull ?? BleConnectionState.disconnected;
+    final connectionState =
+        connectionAsync.valueOrNull ?? BleConnectionState.disconnected;
     final isConnected = connectionState == BleConnectionState.connected;
 
-    // Watch live vitals
+    _syncPulseAnimation(connectionState);
+
+    // Watch live vitals and baseline
     final vitals = ref.watch(liveVitalsProvider);
+    final baselineHr = ref.watch(stressAnalyzerProvider).currentBaseline;
 
     // Get config for the selected vital type
-    final config = _getVitalConfig(widget.vitalType, vitals);
+    final config = _getVitalConfig(widget.vitalType, vitals, baselineHr);
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -81,7 +100,9 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen> with Si
               const SizedBox(height: 20),
 
               // ── Visualization Chart ──────────────────────────────
-              _buildChartSection(context, config, isConnected),
+              RepaintBoundary(
+                child: _buildChartSection(context, config, isConnected),
+              ),
               const SizedBox(height: 24),
 
               // ── Key Statistics Grid ──────────────────────────────
@@ -516,7 +537,7 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen> with Si
       );
     });
 
-    final days = ['Thu', 'Fri', 'Sat', 'Sun', 'Mon', 'Tue', 'Wed'];
+    final days = DateFormatter.lastSevenDayLabels();
 
     return BarChart(
       BarChartData(
@@ -692,9 +713,17 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen> with Si
     );
   }
 
-  _VitalConfig _getVitalConfig(VitalType type, LiveVitalsState vitals) {
+  _VitalConfig _getVitalConfig(
+    VitalType type,
+    LiveVitalsState vitals,
+    double? baselineHr,
+  ) {
     switch (type) {
       case VitalType.heartRate:
+        final avgVal = vitals.avgHeartRate ?? vitals.heartRate;
+        final minVal = vitals.minHeartRate ?? 58;
+        final maxVal = vitals.maxHeartRate ?? 112;
+        final baseVal = baselineHr?.round() ?? 62;
         return _VitalConfig(
           title: 'Heart Rate',
           valueString: '${vitals.heartRate}',
@@ -709,16 +738,16 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen> with Si
             FlSpot(12, 80), FlSpot(13, 85), FlSpot(14, 78), FlSpot(15, 74), FlSpot(16, 70), FlSpot(17, 76),
             FlSpot(18, 82), FlSpot(19, 79), FlSpot(20, 75), FlSpot(21, 70), FlSpot(22, 65), FlSpot(23, 62),
           ],
-          weeklyAverages: [71, 73, 70, 72, 74, 71, 72],
+          weeklyAverages: const [71, 73, 70, 72, 74, 71, 72],
           hardMinY: 40,
           hardMaxY: 120,
           decimalDigits: 0,
           description: 'Your heart rate measures the number of times your heart beats per minute. A lower resting heart rate typically indicates better cardiovascular efficiency and physical conditioning.',
           stats: [
-            _StatItem('Daily Avg', '${vitals.heartRate}', 'bpm'),
-            _StatItem('Min HR', '58', 'bpm'),
-            _StatItem('Max HR', '112', 'bpm'),
-            _StatItem('Resting HR', '62', 'bpm'),
+            _StatItem('Session Avg', '$avgVal', 'bpm'),
+            _StatItem('Min HR', '$minVal', 'bpm'),
+            _StatItem('Max HR', '$maxVal', 'bpm'),
+            _StatItem('Baseline HR', '$baseVal', 'bpm'),
           ],
         );
       case VitalType.hrv:
