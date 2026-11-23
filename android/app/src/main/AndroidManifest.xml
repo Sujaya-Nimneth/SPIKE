@@ -19,6 +19,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <!-- Android 15+ (API 35+) connected device foreground service type -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- Android 13+ (API 33+) notification permission for foreground BLE status -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Declare BLE hardware feature (not required, but used for Play Store filtering) -->
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
@@ -54,6 +56,10 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <service
+            android:name=".BleForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and
