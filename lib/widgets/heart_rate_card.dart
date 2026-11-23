@@ -3,56 +3,30 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/ble_providers.dart';
+import '../providers/health_sync_providers.dart';
 import '../providers/vitals_provider.dart';
+import '../screens/vital_details_screen.dart';
 import '../services/ble_service.dart';
 import '../theme/app_colors.dart';
 import '../utils/app_routes.dart';
-import '../screens/vital_details_screen.dart';
+import '../utils/date_formatter.dart';
 
 /// A dark-themed heart rate chart card using fl_chart.
 ///
-/// Isolates live BPM header rebuilds from the chart and renders live
-/// scrolling samples when streaming from the ring.
-class HeartRateCard extends StatelessWidget {
+/// Shows live scrolling BPM samples when connected, and falls back to the last
+/// saved heart rate + last-connected time + 7-day daily average when offline.
+class HeartRateCard extends ConsumerWidget {
   const HeartRateCard({super.key});
 
-  static const List<FlSpot> _default24hSpots = [
-    FlSpot(0, 62),
-    FlSpot(1, 58),
-    FlSpot(2, 55),
-    FlSpot(3, 54),
-    FlSpot(4, 56),
-    FlSpot(5, 52),
-    FlSpot(6, 58),
-    FlSpot(7, 65),
-    FlSpot(8, 72),
-    FlSpot(9, 78),
-    FlSpot(10, 82),
-    FlSpot(11, 76),
-    FlSpot(12, 80),
-    FlSpot(13, 85),
-    FlSpot(14, 78),
-    FlSpot(15, 74),
-    FlSpot(16, 70),
-    FlSpot(17, 76),
-    FlSpot(18, 82),
-    FlSpot(19, 79),
-    FlSpot(20, 75),
-    FlSpot(21, 70),
-    FlSpot(22, 65),
-    FlSpot(23, 62),
-  ];
-
-  static const List<String> _timeLabels = [
-    '12 AM',
-    '6 AM',
-    '12 PM',
-    '6 PM',
-    'Now',
-  ];
-
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final connectionState =
+        ref.watch(bleConnectionStateProvider).valueOrNull ??
+            BleConnectionState.disconnected;
+    final isConnected = connectionState == BleConnectionState.connected;
+    final history =
+        ref.watch(liveVitalsProvider.select((s) => s.heartRateHistory));
+
     return GestureDetector(
       onTap: () {
         Navigator.of(context).push(
@@ -74,32 +48,21 @@ class HeartRateCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Isolated header row that updates on BPM / connection changes
             const _HeartRateHeaderRow(),
-            const SizedBox(height: 24),
-            // Chart wrapped in RepaintBoundary
-            const RepaintBoundary(
-              child: SizedBox(
-                height: 160,
-                child: _HeartRateChartBody(),
+            const SizedBox(height: 20),
+            if (isConnected) ...[
+              RepaintBoundary(
+                child: SizedBox(
+                  height: 150,
+                  child: _LiveHeartRateChart(history: history),
+                ),
               ),
-            ),
-            const SizedBox(height: 12),
-            // Time labels
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: _timeLabels
-                  .map(
-                    (t) => Text(
-                      t,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            fontSize: 10,
-                            color: AppColors.textTertiary,
-                          ),
-                    ),
-                  )
-                  .toList(),
-            ),
+              if (history.length >= 2) ...[
+                const SizedBox(height: 12),
+                _LiveTimeAxisLabels(history: history),
+              ],
+            ] else
+              const _OfflineHeartRateSummary(),
           ],
         ),
       ),
@@ -113,10 +76,30 @@ class _HeartRateHeaderRow extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final latestHr = ref.watch(latestHeartRateProvider);
-    final connectionAsync = ref.watch(bleConnectionStateProvider);
     final connectionState =
-        connectionAsync.valueOrNull ?? BleConnectionState.disconnected;
-    final displayHr = latestHr ?? 72;
+        ref.watch(bleConnectionStateProvider).valueOrNull ??
+            BleConnectionState.disconnected;
+    final isConnected = connectionState == BleConnectionState.connected;
+    final lastSummary = ref.watch(latestHrSummaryProvider).valueOrNull;
+    final syncStatus = ref.watch(deviceSyncStatusProvider).valueOrNull;
+
+    final int? displayHr = isConnected ? latestHr : lastSummary?.lastHr;
+    final lastTime = syncStatus?.lastConnectedAt ?? lastSummary?.updatedAt;
+
+    final String subtitleText;
+    final Color subtitleColor;
+    if (isConnected) {
+      subtitleText =
+          latestHr != null ? 'Live from R02' : 'Connected · Waiting for PPG';
+      subtitleColor =
+          latestHr != null ? AppColors.pastelSage : AppColors.pastelAmber;
+    } else if (lastTime != null) {
+      subtitleText = 'Last connected ${DateFormatter.formatRelative(lastTime)}';
+      subtitleColor = AppColors.textSecondary;
+    } else {
+      subtitleText = 'No ring data yet';
+      subtitleColor = AppColors.textTertiary;
+    }
 
     return Row(
       children: [
@@ -150,23 +133,22 @@ class _HeartRateHeaderRow extends ConsumerWidget {
               ),
               const SizedBox(height: 2),
               Text(
-                latestHr != null ? 'Live from R02' : 'Last 24 hours',
+                subtitleText,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: latestHr != null
-                          ? AppColors.pastelSage
-                          : AppColors.textTertiary,
+                      color: subtitleColor,
                     ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
             ],
           ),
         ),
-        // BPM badge
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
             color: AppColors.pastelCoral.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(20),
-            border: latestHr != null
+            border: displayHr != null
                 ? Border.all(
                     color: AppColors.pastelCoral.withValues(alpha: 0.3),
                     width: 0.5,
@@ -177,7 +159,7 @@ class _HeartRateHeaderRow extends ConsumerWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                '$displayHr',
+                displayHr != null ? '$displayHr' : '--',
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                       color: AppColors.pastelCoral,
                       fontSize: 18,
@@ -200,30 +182,33 @@ class _HeartRateHeaderRow extends ConsumerWidget {
   }
 }
 
-class _HeartRateChartBody extends ConsumerWidget {
-  const _HeartRateChartBody();
+class _LiveHeartRateChart extends StatelessWidget {
+  final List<VitalSample> history;
+  const _LiveHeartRateChart({required this.history});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final history =
-        ref.watch(liveVitalsProvider.select((s) => s.heartRateHistory));
-
-    final List<FlSpot> spots;
-    double minY = 40;
-    double maxY = 100;
-
-    if (history.length >= 2) {
-      spots = List.generate(history.length, (i) {
-        return FlSpot(i.toDouble(), history[i].value);
-      });
-      final ys = history.map((e) => e.value);
-      final lo = ys.reduce(min);
-      final hi = ys.reduce(max);
-      minY = (lo - 10).clamp(35.0, 90.0);
-      maxY = (hi + 10).clamp(minY + 20.0, 200.0);
-    } else {
-      spots = HeartRateCard._default24hSpots;
+  Widget build(BuildContext context) {
+    if (history.length < 2) {
+      return Center(
+        child: Text(
+          history.isEmpty
+              ? 'Waiting for optical PPG lock…'
+              : 'Collecting samples (${history.first.value.round()} bpm)…',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: AppColors.textSecondary,
+              ),
+        ),
+      );
     }
+
+    final spots = List<FlSpot>.generate(history.length, (i) {
+      return FlSpot(i.toDouble(), history[i].value);
+    });
+    final ys = history.map((e) => e.value);
+    final lo = ys.reduce(min);
+    final hi = ys.reduce(max);
+    final minY = (lo - 10).clamp(35.0, 140.0);
+    final maxY = (hi + 10).clamp(minY + 20.0, 220.0);
 
     return LineChart(
       LineChartData(
@@ -239,7 +224,7 @@ class _HeartRateChartBody extends ConsumerWidget {
         titlesData: const FlTitlesData(show: false),
         borderData: FlBorderData(show: false),
         minX: 0,
-        maxX: (spots.length - 1).toDouble().clamp(1.0, 30.0),
+        maxX: max(1.0, (spots.length - 1).toDouble()),
         minY: minY,
         maxY: maxY,
         lineTouchData: LineTouchData(
@@ -261,28 +246,6 @@ class _HeartRateChartBody extends ConsumerWidget {
             },
           ),
           handleBuiltInTouches: true,
-          getTouchedSpotIndicator: (barData, spotIndexes) {
-            return spotIndexes.map((index) {
-              return TouchedSpotIndicatorData(
-                FlLine(
-                  color: AppColors.pastelCoral.withValues(alpha: 0.3),
-                  strokeWidth: 1,
-                  dashArray: [4, 4],
-                ),
-                FlDotData(
-                  show: true,
-                  getDotPainter: (spot, percent, barData, index) {
-                    return FlDotCirclePainter(
-                      radius: 5,
-                      color: AppColors.pastelCoral,
-                      strokeWidth: 2,
-                      strokeColor: AppColors.background,
-                    );
-                  },
-                ),
-              );
-            }).toList();
-          },
         ),
         lineBarsData: [
           LineChartBarData(
@@ -313,33 +276,150 @@ class _HeartRateChartBody extends ConsumerWidget {
   }
 }
 
-/// A small colored dot indicating the BLE connection status.
+class _LiveTimeAxisLabels extends StatelessWidget {
+  final List<VitalSample> history;
+  const _LiveTimeAxisLabels({required this.history});
+
+  @override
+  Widget build(BuildContext context) {
+    final start = DateFormatter.formatClockTime(history.first.timestamp);
+    final mid = DateFormatter.formatClockTime(
+      history[history.length ~/ 2].timestamp,
+    );
+    final style = Theme.of(context).textTheme.bodySmall?.copyWith(
+          fontSize: 10,
+          color: AppColors.textTertiary,
+        );
+
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(start, style: style),
+        Text(mid, style: style),
+        Text('Now', style: style),
+      ],
+    );
+  }
+}
+
+class _OfflineHeartRateSummary extends ConsumerWidget {
+  const _OfflineHeartRateSummary();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final lastSummary = ref.watch(latestHrSummaryProvider).valueOrNull;
+    final avgs = ref.watch(dailyHrAveragesProvider).valueOrNull;
+
+    if (lastSummary == null) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 14),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceVariant.withValues(alpha: 0.6),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Text(
+          'Connect your Colmi R02 ring in Settings to stream live heart rate and build your daily average.',
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: AppColors.textSecondary,
+                height: 1.4,
+              ),
+        ),
+      );
+    }
+
+    final dailyAvg = avgs?.avgDailyHr?.round();
+
+    return Row(
+      children: [
+        Expanded(
+          child: _OfflineStatChip(
+            label: 'Last Saved',
+            value: '${lastSummary.lastHr} bpm',
+            color: AppColors.pastelCoral,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: _OfflineStatChip(
+            label: 'Daily Avg',
+            value: dailyAvg != null ? '$dailyAvg bpm' : '--',
+            color: AppColors.pastelTeal,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: _OfflineStatChip(
+            label: 'Day Range',
+            value: '${lastSummary.minHr}–${lastSummary.maxHr}',
+            color: AppColors.pastelSage,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _OfflineStatChip extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color color;
+
+  const _OfflineStatChip({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceVariant,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  fontSize: 10,
+                  color: AppColors.textTertiary,
+                ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  color: color,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ConnectionDot extends StatelessWidget {
   final BleConnectionState state;
   const _ConnectionDot({required this.state});
 
   @override
   Widget build(BuildContext context) {
-    final Color color;
-    final String tooltip;
-
-    switch (state) {
-      case BleConnectionState.connected:
-        color = AppColors.pastelSage;
-        tooltip = 'Connected';
-      case BleConnectionState.scanning:
-        color = AppColors.pastelAmber;
-        tooltip = 'Scanning...';
-      case BleConnectionState.connecting:
-        color = AppColors.pastelAmber;
-        tooltip = 'Connecting...';
-      case BleConnectionState.error:
-        color = AppColors.pastelCoral;
-        tooltip = 'Error';
-      case BleConnectionState.disconnected:
-        color = AppColors.textTertiary;
-        tooltip = 'Disconnected';
-    }
+    final (color, tooltip) = switch (state) {
+      BleConnectionState.connected => (AppColors.pastelSage, 'Connected'),
+      BleConnectionState.scanning => (AppColors.pastelAmber, 'Scanning...'),
+      BleConnectionState.connecting => (AppColors.pastelAmber, 'Connecting...'),
+      BleConnectionState.error => (AppColors.pastelCoral, 'Error'),
+      BleConnectionState.disconnected => (AppColors.textTertiary, 'Offline'),
+    };
 
     return Tooltip(
       message: tooltip,

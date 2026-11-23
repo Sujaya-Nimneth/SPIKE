@@ -1,18 +1,19 @@
 import 'dart:async';
+import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
-import '../theme/app_colors.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/ble_providers.dart';
 import '../providers/stress_providers.dart';
 import '../services/ble_service.dart';
+import '../theme/app_colors.dart';
 import '../utils/app_logger.dart';
 
-/// Full-screen settings page with BLE device connection management.
-///
-/// Opened by tapping the ⚙️ icon on the home screen top bar.
-/// Displays connection status, scan controls, connected device info,
-/// and general app settings.
+const String kAppVersion = '1.0.0';
+
+/// Full-screen settings page with BLE device connection management,
+/// ring utilities, privacy controls, and app metadata.
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
 
@@ -77,6 +78,56 @@ class SettingsScreen extends ConsumerWidget {
     }
   }
 
+  void _showHiddenCoworkersSheet(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => const _HiddenCoworkersSheet(),
+    );
+  }
+
+  void _showAboutDialog(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: const BorderSide(color: AppColors.cardBorder, width: 0.5),
+        ),
+        title: Text(
+          'Spike · v$kAppVersion',
+          style: Theme.of(ctx).textTheme.headlineSmall,
+        ),
+        content: Text(
+          'Smart ring companion app for the Colmi R02 over BLE UART. '
+          'Features real-time PPG heart rate streaming, WHOOP-style readiness scoring, '
+          'sleep & activity sync, spike-frozen baseline stress detection, and a coworker stress leaderboard.',
+          style: Theme.of(ctx).textTheme.bodyMedium?.copyWith(
+                color: AppColors.textSecondary,
+                height: 1.5,
+              ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text(
+              'Close',
+              style: TextStyle(
+                color: AppColors.pastelTeal,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
@@ -84,10 +135,7 @@ class SettingsScreen extends ConsumerWidget {
       body: SafeArea(
         child: Column(
           children: [
-            // ── Top Bar ──────────────────────────────────────────
             _buildAppBar(context),
-
-            // ── Content ──────────────────────────────────────────
             Expanded(
               child: SingleChildScrollView(
                 physics: const BouncingScrollPhysics(),
@@ -95,7 +143,6 @@ class SettingsScreen extends ConsumerWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Device connection section
                     const _SectionHeader(label: 'DEVICE'),
                     const SizedBox(height: 12),
                     const _BluetoothOffBanner(),
@@ -109,9 +156,38 @@ class SettingsScreen extends ConsumerWidget {
 
                     const SizedBox(height: 32),
 
-                    // Data & Privacy section
                     const _SectionHeader(label: 'DATA & PRIVACY'),
                     const SizedBox(height: 12),
+                    _SettingsTile(
+                      icon: Icons.visibility_outlined,
+                      title: 'Hidden Coworkers',
+                      subtitle: 'Restore coworkers hidden from the leaderboard',
+                      accentColor: AppColors.pastelLavender,
+                      onTap: () => _showHiddenCoworkersSheet(context),
+                    ),
+                    const SizedBox(height: 8),
+                    _SettingsTile(
+                      icon: Icons.restart_alt_rounded,
+                      title: 'Reset Stress Baseline',
+                      subtitle: 'Recalibrate 10-minute rolling HR baseline',
+                      accentColor: AppColors.pastelAmber,
+                      onTap: () {
+                        ref.read(stressAnalyzerProvider).resetDetector();
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: const Text(
+                              'Stress baseline reset — recalibrating from incoming HR.',
+                            ),
+                            behavior: SnackBarBehavior.floating,
+                            backgroundColor: AppColors.surfaceLight,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 8),
                     _SettingsTile(
                       icon: Icons.delete_outline_rounded,
                       title: 'Clear Stress & Leaderboard Data',
@@ -122,14 +198,13 @@ class SettingsScreen extends ConsumerWidget {
 
                     const SizedBox(height: 32),
 
-                    // General section
                     const _SectionHeader(label: 'GENERAL'),
                     const SizedBox(height: 12),
                     _SettingsTile(
                       icon: Icons.info_outline_rounded,
                       title: 'About Spike',
-                      subtitle: 'Version 1.0.0',
-                      onTap: () {},
+                      subtitle: 'Version $kAppVersion',
+                      onTap: () => _showAboutDialog(context),
                     ),
                     const SizedBox(height: 8),
                     _SettingsTile(
@@ -138,7 +213,7 @@ class SettingsScreen extends ConsumerWidget {
                       onTap: () => showLicensePage(
                         context: context,
                         applicationName: 'Spike',
-                        applicationVersion: '1.0.0',
+                        applicationVersion: kAppVersion,
                       ),
                     ),
                   ],
@@ -156,24 +231,28 @@ class SettingsScreen extends ConsumerWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
       child: Row(
         children: [
-          // Back button
-          GestureDetector(
-            onTap: () => Navigator.of(context).pop(),
-            child: Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: AppColors.surfaceVariant,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: AppColors.cardBorder,
-                  width: 0.5,
+          Semantics(
+            button: true,
+            label: 'Back',
+            child: InkWell(
+              onTap: () => Navigator.of(context).pop(),
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceVariant,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: AppColors.cardBorder,
+                    width: 0.5,
+                  ),
                 ),
-              ),
-              child: const Icon(
-                Icons.arrow_back_ios_new_rounded,
-                color: AppColors.textSecondary,
-                size: 18,
+                child: const Icon(
+                  Icons.arrow_back_ios_new_rounded,
+                  color: AppColors.textSecondary,
+                  size: 18,
+                ),
               ),
             ),
           ),
@@ -188,9 +267,99 @@ class SettingsScreen extends ConsumerWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────
-// Section Header
-// ─────────────────────────────────────────────────────────────────
+class _HiddenCoworkersSheet extends ConsumerWidget {
+  const _HiddenCoworkersSheet();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final hiddenAsync = ref.watch(hiddenCoworkersProvider);
+    final hidden = hiddenAsync.valueOrNull ?? const <String>[];
+
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Hidden Coworkers',
+              style: Theme.of(context).textTheme.headlineSmall,
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Restore any coworker to show them on the leaderboard again.',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: AppColors.textSecondary,
+                  ),
+            ),
+            const SizedBox(height: 16),
+            if (hidden.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 20),
+                child: Center(
+                  child: Text(
+                    'No hidden coworkers.',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ),
+              )
+            else
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 280),
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: hidden.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 8),
+                  itemBuilder: (context, index) {
+                    final name = hidden[index];
+                    return Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.surfaceVariant,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              name,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .titleSmall
+                                  ?.copyWith(color: AppColors.textPrimary),
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: () async {
+                              await ref
+                                  .read(databaseServiceProvider)
+                                  .setCoworkerHidden(name, hidden: false);
+                            },
+                            child: const Text(
+                              'Restore',
+                              style: TextStyle(
+                                color: AppColors.pastelTeal,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
 class _SectionHeader extends StatelessWidget {
   final String label;
@@ -212,10 +381,6 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────
-// Bluetooth Off Banner
-// ─────────────────────────────────────────────────────────────────
-
 class _BluetoothOffBanner extends ConsumerWidget {
   const _BluetoothOffBanner();
 
@@ -224,10 +389,31 @@ class _BluetoothOffBanner extends ConsumerWidget {
     final adapterAsync = ref.watch(bleAdapterStateProvider);
     final adapterState = adapterAsync.valueOrNull;
 
-    // Only show when BT is explicitly off
-    if (adapterState == null || adapterState == BluetoothAdapterState.on) {
+    if (adapterState == null ||
+        adapterState == BluetoothAdapterState.on ||
+        adapterState == BluetoothAdapterState.unknown) {
       return const SizedBox.shrink();
     }
+
+    final (title, subtitle, canTurnOn) = switch (adapterState) {
+      BluetoothAdapterState.unauthorized => (
+          'Bluetooth Permission Required',
+          'Grant Nearby Devices / Bluetooth access in system settings',
+          false,
+        ),
+      BluetoothAdapterState.unavailable => (
+          'Bluetooth Unsupported',
+          'This device does not support Bluetooth Low Energy',
+          false,
+        ),
+      _ => (
+          'Bluetooth is Off',
+          (!kIsWeb && Platform.isAndroid)
+              ? 'Turn on Bluetooth to connect to your ring'
+              : 'Enable Bluetooth in Control Center or System Settings',
+          !kIsWeb && Platform.isAndroid,
+        ),
+    };
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
@@ -262,7 +448,7 @@ class _BluetoothOffBanner extends ConsumerWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Bluetooth is Off',
+                    title,
                     style: Theme.of(context).textTheme.titleSmall?.copyWith(
                           color: AppColors.pastelCoral,
                           fontWeight: FontWeight.w600,
@@ -270,7 +456,7 @@ class _BluetoothOffBanner extends ConsumerWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    'Turn on Bluetooth to connect to your ring',
+                    subtitle,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: AppColors.textTertiary,
                           fontSize: 11,
@@ -279,32 +465,32 @@ class _BluetoothOffBanner extends ConsumerWidget {
                 ],
               ),
             ),
-            GestureDetector(
-              onTap: () async {
-                try {
-                  await FlutterBluePlus.turnOn();
-                } catch (_) {
-                  // iOS doesn't support turnOn — user must enable from Settings
-                }
-              },
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: AppColors.pastelCoral.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Text(
-                  'Turn On',
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: AppColors.pastelCoral,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.5,
-                        fontSize: 11,
-                      ),
+            if (canTurnOn)
+              InkWell(
+                onTap: () async {
+                  try {
+                    await FlutterBluePlus.turnOn();
+                  } catch (_) {}
+                },
+                borderRadius: BorderRadius.circular(10),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: AppColors.pastelCoral.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    'Turn On',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: AppColors.pastelCoral,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.5,
+                          fontSize: 11,
+                        ),
+                  ),
                 ),
               ),
-            ),
           ],
         ),
       ),
@@ -312,17 +498,12 @@ class _BluetoothOffBanner extends ConsumerWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────
-// Connection Status Card
-// ─────────────────────────────────────────────────────────────────
-
 class _ConnectionStatusCard extends ConsumerWidget {
   const _ConnectionStatusCard();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final connectionAsync = ref.watch(bleConnectionStateProvider);
-
     final state = connectionAsync.valueOrNull ?? BleConnectionState.disconnected;
     final (statusLabel, statusColor, iconData) = _statusInfo(state);
 
@@ -331,13 +512,11 @@ class _ConnectionStatusCard extends ConsumerWidget {
       decoration: _cardDecoration(),
       child: Row(
         children: [
-          // Animated Bluetooth icon
           _PulsingBluetoothIcon(
             color: statusColor,
             isAnimating: state == BleConnectionState.connected,
           ),
           const SizedBox(width: 16),
-          // Status text
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -384,24 +563,35 @@ class _ConnectionStatusCard extends ConsumerWidget {
   }
 
   (String, Color, IconData) _statusInfo(BleConnectionState state) {
-    switch (state) {
-      case BleConnectionState.connected:
-        return ('Connected', AppColors.pastelTeal, Icons.check_circle_outline_rounded);
-      case BleConnectionState.scanning:
-        return ('Scanning...', AppColors.pastelAmber, Icons.radar_rounded);
-      case BleConnectionState.connecting:
-        return ('Connecting...', AppColors.pastelAmber, Icons.sync_rounded);
-      case BleConnectionState.error:
-        return ('Error', AppColors.pastelCoral, Icons.error_outline_rounded);
-      case BleConnectionState.disconnected:
-        return ('Disconnected', AppColors.textTertiary, Icons.bluetooth_disabled_rounded);
-    }
+    return switch (state) {
+      BleConnectionState.connected => (
+          'Connected',
+          AppColors.pastelTeal,
+          Icons.check_circle_outline_rounded,
+        ),
+      BleConnectionState.scanning => (
+          'Scanning...',
+          AppColors.pastelAmber,
+          Icons.radar_rounded,
+        ),
+      BleConnectionState.connecting => (
+          'Connecting...',
+          AppColors.pastelAmber,
+          Icons.sync_rounded,
+        ),
+      BleConnectionState.error => (
+          'Error',
+          AppColors.pastelCoral,
+          Icons.error_outline_rounded,
+        ),
+      BleConnectionState.disconnected => (
+          'Disconnected',
+          AppColors.textTertiary,
+          Icons.bluetooth_disabled_rounded,
+        ),
+    };
   }
 }
-
-// ─────────────────────────────────────────────────────────────────
-// Pulsing Bluetooth Icon
-// ─────────────────────────────────────────────────────────────────
 
 class _PulsingBluetoothIcon extends StatefulWidget {
   final Color color;
@@ -466,7 +656,6 @@ class _PulsingBluetoothIconState extends State<_PulsingBluetoothIcon>
       child: Stack(
         alignment: Alignment.center,
         children: [
-          // Pulse ring
           if (widget.isAnimating)
             AnimatedBuilder(
               animation: _controller,
@@ -487,7 +676,6 @@ class _PulsingBluetoothIconState extends State<_PulsingBluetoothIcon>
                 ),
               ),
             ),
-          // Icon background
           Container(
             width: 44,
             height: 44,
@@ -507,10 +695,6 @@ class _PulsingBluetoothIconState extends State<_PulsingBluetoothIcon>
   }
 }
 
-// ─────────────────────────────────────────────────────────────────
-// Connected Device Card
-// ─────────────────────────────────────────────────────────────────
-
 class _ConnectedDeviceCard extends ConsumerWidget {
   const _ConnectedDeviceCard();
 
@@ -523,7 +707,7 @@ class _ConnectedDeviceCard extends ConsumerWidget {
       return const SizedBox.shrink();
     }
 
-    final deviceName = ref.watch(connectedDeviceNameProvider) ?? 'Unknown';
+    final deviceName = ref.watch(connectedDeviceNameProvider) ?? 'Colmi R02';
     final batteryAsync = ref.watch(batteryStatusProvider);
 
     return Container(
@@ -533,7 +717,6 @@ class _ConnectedDeviceCard extends ConsumerWidget {
         children: [
           Row(
             children: [
-              // Ring icon
               Container(
                 width: 44,
                 height: 44,
@@ -555,7 +738,6 @@ class _ConnectedDeviceCard extends ConsumerWidget {
                 ),
               ),
               const SizedBox(width: 14),
-              // Device info
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -576,7 +758,6 @@ class _ConnectedDeviceCard extends ConsumerWidget {
                   ],
                 ),
               ),
-              // Battery indicator
               batteryAsync.when(
                 data: (battery) => _BatteryBadge(
                   percent: battery.percent,
@@ -599,14 +780,101 @@ class _ConnectedDeviceCard extends ConsumerWidget {
             ],
           ),
           const SizedBox(height: 14),
-          // Disconnect button
+          Row(
+            children: [
+              Expanded(
+                child: InkWell(
+                  onTap: () async {
+                    await ref.read(bleServiceProvider).findDevice();
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: const Text('Blinking ring LED…'),
+                          behavior: SnackBarBehavior.floating,
+                          backgroundColor: AppColors.surfaceLight,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          duration: const Duration(seconds: 2),
+                        ),
+                      );
+                    }
+                  },
+                  borderRadius: BorderRadius.circular(12),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    decoration: BoxDecoration(
+                      color: AppColors.pastelTeal.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: AppColors.pastelTeal.withValues(alpha: 0.2),
+                        width: 0.5,
+                      ),
+                    ),
+                    child: Center(
+                      child: Text(
+                        'Find My Ring',
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                              color: AppColors.pastelTeal,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 12,
+                            ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: InkWell(
+                  onTap: () {
+                    unawaited(ref.read(bleServiceProvider).syncAllTelemetry());
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: const Text('Syncing ring activity & sleep…'),
+                        behavior: SnackBarBehavior.floating,
+                        backgroundColor: AppColors.surfaceLight,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                  borderRadius: BorderRadius.circular(12),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    decoration: BoxDecoration(
+                      color: AppColors.surfaceVariant,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: AppColors.cardBorder,
+                        width: 0.5,
+                      ),
+                    ),
+                    child: Center(
+                      child: Text(
+                        'Sync Now',
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                              color: AppColors.textPrimary,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 12,
+                            ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
           SizedBox(
             width: double.infinity,
-            child: GestureDetector(
+            child: InkWell(
               onTap: () async {
-                final service = ref.read(bleServiceProvider);
-                await service.disconnect();
+                await ref.read(bleServiceProvider).disconnect();
               },
+              borderRadius: BorderRadius.circular(12),
               child: Container(
                 padding: const EdgeInsets.symmetric(vertical: 10),
                 decoration: BoxDecoration(
@@ -634,10 +902,6 @@ class _ConnectedDeviceCard extends ConsumerWidget {
     );
   }
 }
-
-// ─────────────────────────────────────────────────────────────────
-// Battery Badge
-// ─────────────────────────────────────────────────────────────────
 
 class _BatteryBadge extends StatelessWidget {
   final int percent;
@@ -691,47 +955,18 @@ class _BatteryBadge extends StatelessWidget {
   }
 }
 
-// Scan Button
-// ─────────────────────────────────────────────────────────────────
-
-class _ScanButton extends ConsumerStatefulWidget {
+class _ScanButton extends ConsumerWidget {
   const _ScanButton();
 
   @override
-  ConsumerState<_ScanButton> createState() => _ScanButtonState();
-}
-
-class _ScanButtonState extends ConsumerState<_ScanButton> {
-  bool _tapped = false;
-
-  void _handleTap() {
-    AppLogger.info('Settings', 'Scan button tapped');
-    setState(() => _tapped = true);
-    unawaited(Future.delayed(const Duration(milliseconds: 300), () {
-      if (mounted) setState(() => _tapped = false);
-    }));
-
-    final connectionAsync = ref.read(bleConnectionStateProvider);
-    final state = connectionAsync.valueOrNull ?? BleConnectionState.disconnected;
-    final isScanning = state == BleConnectionState.scanning;
-    final service = ref.read(bleServiceProvider);
-
-    if (isScanning) {
-      AppLogger.info('Settings', 'Stopping scan...');
-      unawaited(service.stopScan());
-    } else {
-      AppLogger.info('Settings', 'Starting scan...');
-      unawaited(service.forceStartScan());
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final connectionAsync = ref.watch(bleConnectionStateProvider);
     final state = connectionAsync.valueOrNull ?? BleConnectionState.disconnected;
 
     final isScanning = state == BleConnectionState.scanning;
+    final isConnecting = state == BleConnectionState.connecting;
     final isConnected = state == BleConnectionState.connected;
+    final isDisabled = isConnected || isConnecting;
 
     final accentColor = isScanning ? AppColors.pastelAmber : AppColors.pastelTeal;
 
@@ -741,18 +976,27 @@ class _ScanButtonState extends ConsumerState<_ScanButton> {
         width: double.infinity,
         height: 50,
         child: TextButton(
-          onPressed: isConnected ? null : _handleTap,
+          onPressed: isDisabled
+              ? null
+              : () {
+                  final service = ref.read(bleServiceProvider);
+                  if (isScanning) {
+                    AppLogger.info('Settings', 'Stopping scan...');
+                    unawaited(service.stopScan());
+                  } else {
+                    AppLogger.info('Settings', 'Starting scan...');
+                    unawaited(service.forceStartScan());
+                  }
+                },
           style: TextButton.styleFrom(
-            backgroundColor: _tapped
-                ? accentColor.withValues(alpha: 0.2)
-                : accentColor.withValues(alpha: 0.08),
+            backgroundColor: accentColor.withValues(alpha: 0.08),
             foregroundColor: accentColor,
             disabledForegroundColor: AppColors.textTertiary,
             disabledBackgroundColor: AppColors.surfaceVariant,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16),
               side: BorderSide(
-                color: isConnected
+                color: isDisabled
                     ? AppColors.cardBorder
                     : accentColor.withValues(alpha: 0.3),
                 width: 0.5,
@@ -764,7 +1008,7 @@ class _ScanButtonState extends ConsumerState<_ScanButton> {
             mainAxisAlignment: MainAxisAlignment.center,
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (isScanning) ...[
+              if (isScanning || isConnecting) ...[
                 const SizedBox(
                   width: 18,
                   height: 18,
@@ -775,7 +1019,7 @@ class _ScanButtonState extends ConsumerState<_ScanButton> {
                 ),
                 const SizedBox(width: 10),
                 Text(
-                  'Stop Scanning',
+                  isConnecting ? 'Connecting…' : 'Stop Scanning',
                   style: Theme.of(context).textTheme.titleSmall?.copyWith(
                         color: AppColors.pastelAmber,
                         fontWeight: FontWeight.w600,
@@ -786,14 +1030,17 @@ class _ScanButtonState extends ConsumerState<_ScanButton> {
                   isConnected
                       ? Icons.bluetooth_connected_rounded
                       : Icons.search_rounded,
-                  color: isConnected ? AppColors.textTertiary : AppColors.pastelTeal,
+                  color:
+                      isConnected ? AppColors.textTertiary : AppColors.pastelTeal,
                   size: 20,
                 ),
                 const SizedBox(width: 8),
                 Text(
                   isConnected ? 'Already Connected' : 'Scan for Ring',
                   style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        color: isConnected ? AppColors.textTertiary : AppColors.pastelTeal,
+                        color: isConnected
+                            ? AppColors.textTertiary
+                            : AppColors.pastelTeal,
                         fontWeight: FontWeight.w600,
                       ),
                 ),
@@ -806,10 +1053,6 @@ class _ScanButtonState extends ConsumerState<_ScanButton> {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────
-// Discovered Devices List
-// ─────────────────────────────────────────────────────────────────
-
 class _DiscoveredDevicesList extends ConsumerWidget {
   const _DiscoveredDevicesList();
 
@@ -820,7 +1063,6 @@ class _DiscoveredDevicesList extends ConsumerWidget {
     final resultsAsync = ref.watch(scanResultsProvider);
     final hasResults = resultsAsync.valueOrNull?.isNotEmpty ?? false;
 
-    // Keep the list visible during scanning, connecting, or if we have results to display
     if (state != BleConnectionState.scanning &&
         state != BleConnectionState.connecting &&
         !hasResults) {
@@ -829,10 +1071,12 @@ class _DiscoveredDevicesList extends ConsumerWidget {
 
     return resultsAsync.when(
       data: (results) {
-        // Filter to only named devices
-        final namedDevices = results
-            .where((r) => r.device.platformName.isNotEmpty)
-            .toList();
+        final namedDevices = results.where((r) {
+          final name = r.device.platformName.isNotEmpty
+              ? r.device.platformName
+              : r.advertisementData.advName;
+          return name.isNotEmpty;
+        }).toList();
 
         if (namedDevices.isEmpty) {
           return Padding(
@@ -860,88 +1104,93 @@ class _DiscoveredDevicesList extends ConsumerWidget {
                     ),
               ),
             ),
-            ...namedDevices.map((r) => Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: GestureDetector(
-                    onTap: () {
-                      unawaited(
-                        ref
-                            .read(bleServiceProvider)
-                            .connectToDevice(r.device),
-                      );
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 12),
-                      decoration: _cardDecoration(),
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.bluetooth_rounded,
-                            color: r.device.platformName
-                                    .toLowerCase()
-                                    .contains('r02')
-                                ? AppColors.pastelTeal
-                                : AppColors.textTertiary,
-                            size: 20,
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  r.device.platformName,
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .titleSmall
-                                      ?.copyWith(
-                                        color: AppColors.textPrimary,
-                                        fontWeight: FontWeight.w500,
-                                      ),
-                                ),
-                                Text(
-                                  'RSSI: ${r.rssi} dBm',
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .bodySmall
-                                      ?.copyWith(
-                                        color: AppColors.textTertiary,
-                                        fontSize: 11,
-                                      ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          if (r.device.platformName
-                              .toLowerCase()
-                              .contains('r02'))
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 3),
-                              decoration: BoxDecoration(
-                                color: AppColors.pastelTeal
-                                    .withValues(alpha: 0.12),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Text(
-                                'SPIKE',
+            ...namedDevices.map((r) {
+              final resolvedName = r.device.platformName.isNotEmpty
+                  ? r.device.platformName
+                  : r.advertisementData.advName;
+              final isR02 = resolvedName.toLowerCase().contains('r02');
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: InkWell(
+                  onTap: () {
+                    unawaited(
+                      ref.read(bleServiceProvider).connectToDevice(r.device),
+                    );
+                  },
+                  borderRadius: BorderRadius.circular(20),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                    decoration: _cardDecoration(),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.bluetooth_rounded,
+                          color: isR02
+                              ? AppColors.pastelTeal
+                              : AppColors.textTertiary,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                resolvedName,
                                 style: Theme.of(context)
                                     .textTheme
-                                    .labelSmall
+                                    .titleSmall
                                     ?.copyWith(
-                                      color: AppColors.pastelTeal,
-                                      letterSpacing: 1.5,
-                                      fontSize: 9,
-                                      fontWeight: FontWeight.w700,
+                                      color: AppColors.textPrimary,
+                                      fontWeight: FontWeight.w500,
                                     ),
                               ),
+                              Text(
+                                'RSSI: ${r.rssi} dBm',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.copyWith(
+                                      color: AppColors.textTertiary,
+                                      fontSize: 11,
+                                    ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (isR02)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
                             ),
-                        ],
-                      ),
+                            decoration: BoxDecoration(
+                              color:
+                                  AppColors.pastelTeal.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              'SPIKE',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .labelSmall
+                                  ?.copyWith(
+                                    color: AppColors.pastelTeal,
+                                    letterSpacing: 1.5,
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
-                )),
+                ),
+              );
+            }),
           ],
         );
       },
@@ -950,10 +1199,6 @@ class _DiscoveredDevicesList extends ConsumerWidget {
     );
   }
 }
-
-// ─────────────────────────────────────────────────────────────────
-// General Settings Tile
-// ─────────────────────────────────────────────────────────────────
 
 class _SettingsTile extends StatelessWidget {
   final IconData icon;
@@ -972,61 +1217,62 @@ class _SettingsTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: _cardDecoration(),
-        child: Row(
-          children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: accentColor.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(10),
+    return Semantics(
+      button: true,
+      label: title,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: _cardDecoration(),
+          child: Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: accentColor.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icon, color: accentColor, size: 18),
               ),
-              child: Icon(icon, color: accentColor, size: 18),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          color: AppColors.textPrimary,
-                          fontWeight: FontWeight.w500,
-                        ),
-                  ),
-                  if (subtitle != null) ...[
-                    const SizedBox(height: 2),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                     Text(
-                      subtitle!,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: AppColors.textTertiary,
+                      title,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                            color: AppColors.textPrimary,
+                            fontWeight: FontWeight.w500,
                           ),
                     ),
+                    if (subtitle != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle!,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: AppColors.textTertiary,
+                            ),
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
-            ),
-            const Icon(
-              Icons.chevron_right_rounded,
-              color: AppColors.textTertiary,
-              size: 20,
-            ),
-          ],
+              const Icon(
+                Icons.chevron_right_rounded,
+                color: AppColors.textTertiary,
+                size: 20,
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 }
-
-// ─────────────────────────────────────────────────────────────────
-// Shared card decoration
-// ─────────────────────────────────────────────────────────────────
 
 BoxDecoration _cardDecoration() {
   return BoxDecoration(
