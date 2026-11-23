@@ -1,15 +1,11 @@
 import 'dart:async';
 
 /// Manages active manual meeting context for stress event correlation.
-///
-/// Since Spike uses privacy-first manual tagging (no device calendar
-/// permissions required), users can optionally start an active meeting
-/// session with selected coworkers—or tag coworkers on detected stress
-/// events after the fact.
 class CalendarService {
   CalendarService();
 
   CurrentMeeting? _activeMeeting;
+  Timer? _expiryTimer;
   final _meetingController = StreamController<CurrentMeeting?>.broadcast();
 
   /// Stream of active manual meeting changes.
@@ -20,8 +16,7 @@ class CalendarService {
 
   /// Start a live meeting session with the specified [attendees] and optional [title].
   ///
-  /// Any stress episode detected while this session is active will automatically
-  /// be tagged with these coworkers.
+  /// Automatically expires after [maxDuration] and notifies listeners.
   CurrentMeeting startMeetingSession({
     required List<String> attendees,
     String? title,
@@ -38,12 +33,14 @@ class CalendarService {
         ? 'Meeting with ${cleanAttendees.join(', ')}'
         : title.trim();
 
+    _expiryTimer?.cancel();
     _activeMeeting = CurrentMeeting(
       title: meetingTitle,
       attendees: cleanAttendees,
       start: now,
       end: now.add(maxDuration),
     );
+    _expiryTimer = Timer(maxDuration, endMeetingSession);
 
     if (!_meetingController.isClosed) {
       _meetingController.add(_activeMeeting);
@@ -53,6 +50,9 @@ class CalendarService {
 
   /// End the currently active manual meeting session.
   void endMeetingSession() {
+    _expiryTimer?.cancel();
+    _expiryTimer = null;
+    if (_activeMeeting == null) return;
     _activeMeeting = null;
     if (!_meetingController.isClosed) {
       _meetingController.add(null);
@@ -71,6 +71,8 @@ class CalendarService {
   }
 
   void dispose() {
+    _expiryTimer?.cancel();
+    _expiryTimer = null;
     unawaited(_meetingController.close());
   }
 }

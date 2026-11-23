@@ -67,7 +67,7 @@ class VitalsScreen extends ConsumerWidget {
               child: _VitalTile(
                 icon: Icons.favorite_rounded,
                 title: 'Heart Rate',
-                value: '$heartRate bpm',
+                value: heartRate != null ? '$heartRate bpm' : '-- bpm',
                 subtitle: 'Real-time optical PPG sensor',
                 color: AppColors.pastelCoral,
                 trend: isConnected

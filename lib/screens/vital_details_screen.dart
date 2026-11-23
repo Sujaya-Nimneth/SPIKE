@@ -726,7 +726,7 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
         final baseVal = baselineHr?.round() ?? 62;
         return _VitalConfig(
           title: 'Heart Rate',
-          valueString: '${vitals.heartRate}',
+          valueString: '${vitals.heartRate ?? '--'}',
           unit: 'bpm',
           color: AppColors.pastelCoral,
           icon: Icons.favorite_rounded,
@@ -744,7 +744,7 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
           decimalDigits: 0,
           description: 'Your heart rate measures the number of times your heart beats per minute. A lower resting heart rate typically indicates better cardiovascular efficiency and physical conditioning.',
           stats: [
-            _StatItem('Session Avg', '$avgVal', 'bpm'),
+            _StatItem('Session Avg', '${avgVal ?? '--'}', 'bpm'),
             _StatItem('Min HR', '$minVal', 'bpm'),
             _StatItem('Max HR', '$maxVal', 'bpm'),
             _StatItem('Baseline HR', '$baseVal', 'bpm'),

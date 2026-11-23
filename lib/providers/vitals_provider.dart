@@ -1,6 +1,9 @@
+import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/ble_service.dart';
+import '../services/database_service.dart';
 import 'ble_providers.dart';
+import 'stress_providers.dart';
 
 /// A single data point representing a vital reading at a specific time.
 class VitalSample {
@@ -11,17 +14,14 @@ class VitalSample {
 }
 
 /// Holds real-time heart rate telemetry and session statistics from the ring.
-///
-/// Simulated random vitals (HRV, temperature, respiratory rate, SpO2) have been
-/// removed so only genuine sensor data is streamed.
 class LiveVitalsState {
-  final int heartRate;
+  final int? heartRate;
   final int? minHeartRate;
   final int? maxHeartRate;
   final int? avgHeartRate;
   final List<VitalSample> heartRateHistory;
 
-  // Retained for backward compatibility with detail configs when not connected
+  // Compatibility fields removed in Phase 4 UI cleanup
   final int hrv;
   final double bodyTempDeviation;
   final double respiratoryRate;
@@ -32,7 +32,7 @@ class LiveVitalsState {
   final List<VitalSample> spo2History;
 
   const LiveVitalsState({
-    required this.heartRate,
+    this.heartRate,
     this.minHeartRate,
     this.maxHeartRate,
     this.avgHeartRate,
@@ -49,20 +49,21 @@ class LiveVitalsState {
 
   factory LiveVitalsState.initial() {
     return const LiveVitalsState(
-      heartRate: 72,
+      heartRate: null,
       heartRateHistory: [],
     );
   }
 
   LiveVitalsState copyWith({
     int? heartRate,
+    bool clearHeartRate = false,
     int? minHeartRate,
     int? maxHeartRate,
     int? avgHeartRate,
     List<VitalSample>? heartRateHistory,
   }) {
     return LiveVitalsState(
-      heartRate: heartRate ?? this.heartRate,
+      heartRate: clearHeartRate ? null : (heartRate ?? this.heartRate),
       minHeartRate: minHeartRate ?? this.minHeartRate,
       maxHeartRate: maxHeartRate ?? this.maxHeartRate,
       avgHeartRate: avgHeartRate ?? this.avgHeartRate,
@@ -81,24 +82,35 @@ class LiveVitalsState {
 
 /// Manages [LiveVitalsState] from real BLE heart rate notifications.
 ///
-/// Does not run any background random-number timers; updates occur strictly
-/// when real heart rate packets arrive from the ring or when connection state
-/// resets.
+/// Subscribes directly to the raw [Stream<int>] so consecutive identical BPM
+/// packets are never deduplicated or dropped from the chart or session stats.
 class LiveVitalsNotifier extends StateNotifier<LiveVitalsState> {
   static const int _maxHistoryLength = 30;
+  static const Duration _dbPersistInterval = Duration(seconds: 5);
 
   final Ref _ref;
+  final DatabaseService? _dbOverride;
+  final bool _persistToDb;
+
   ProviderSubscription<AsyncValue<BleConnectionState>>? _connectionSubscription;
-  ProviderSubscription<int?>? _hrSubscription;
+  StreamSubscription<int>? _rawHrSubscription;
 
   int _sampleCount = 0;
   int _hrSum = 0;
+  DateTime? _lastDbPersistAt;
 
-  LiveVitalsNotifier(this._ref) : super(LiveVitalsState.initial()) {
-    _setupListeners();
+  LiveVitalsNotifier(
+    this._ref, {
+    Stream<int>? heartRateStreamOverride,
+    DatabaseService? databaseServiceOverride,
+    bool persistToDb = true,
+  })  : _dbOverride = databaseServiceOverride,
+        _persistToDb = persistToDb,
+        super(LiveVitalsState.initial()) {
+    _setupListeners(heartRateStreamOverride);
   }
 
-  void _setupListeners() {
+  void _setupListeners(Stream<int>? streamOverride) {
     _connectionSubscription = _ref.listen<AsyncValue<BleConnectionState>>(
       bleConnectionStateProvider,
       (previous, next) {
@@ -110,19 +122,14 @@ class LiveVitalsNotifier extends StateNotifier<LiveVitalsState> {
       fireImmediately: true,
     );
 
-    _hrSubscription = _ref.listen<int?>(
-      latestHeartRateProvider,
-      (previous, next) {
-        if (next != null) {
-          _updateHeartRate(next);
-        }
-      },
-    );
+    final stream = streamOverride ?? _ref.watch(bleServiceProvider).heartRateStream;
+    _rawHrSubscription = stream.listen(_updateHeartRate);
   }
 
   void _resetToBaseline() {
     _sampleCount = 0;
     _hrSum = 0;
+    _lastDbPersistAt = null;
     state = LiveVitalsState.initial();
   }
 
@@ -147,11 +154,38 @@ class LiveVitalsNotifier extends StateNotifier<LiveVitalsState> {
       avgHeartRate: (_hrSum / _sampleCount).round(),
       heartRateHistory: List<VitalSample>.unmodifiable(updatedHistory),
     );
+
+    if (_persistToDb &&
+        (_lastDbPersistAt == null ||
+            now.difference(_lastDbPersistAt!) >= _dbPersistInterval)) {
+      _lastDbPersistAt = now;
+      unawaited(_persistSample(hr, now));
+    }
+  }
+
+  Future<void> _persistSample(int hr, DateTime now) async {
+    try {
+      final DatabaseService db =
+          _dbOverride ?? _ref.read<DatabaseService>(databaseServiceProvider);
+      final restingHr = _ref.read(stressAnalyzerProvider).currentBaseline?.round();
+      await db.recordHeartRateSample(
+        hr,
+        timestamp: now,
+        restingHr: restingHr,
+      );
+      await db.updateSyncState(
+        'last_connected_at',
+        now.toUtc().toIso8601String(),
+        notify: false,
+      );
+    } catch (_) {
+      // Ignore DB errors in environments without sqflite plugin
+    }
   }
 
   @override
   void dispose() {
-    _hrSubscription?.close();
+    unawaited(_rawHrSubscription?.cancel());
     _connectionSubscription?.close();
     super.dispose();
   }
