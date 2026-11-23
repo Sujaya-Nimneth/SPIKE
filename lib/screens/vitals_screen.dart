@@ -1,29 +1,29 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../theme/app_colors.dart';
 import '../providers/ble_providers.dart';
+import '../providers/health_sync_providers.dart';
 import '../providers/stress_providers.dart';
 import '../providers/vitals_provider.dart';
 import '../services/ble_service.dart';
 import '../services/stress/stress_detector.dart';
+import '../theme/app_colors.dart';
 import '../utils/app_routes.dart';
+import '../utils/date_formatter.dart';
 import 'vital_details_screen.dart';
 
-/// Vitals screen displaying real-time smart ring telemetry.
-///
-/// Simulated vitals without hardware backing are hidden; displays live
-/// Heart Rate, rolling stress baseline, and session heart rate statistics.
+/// Vitals screen displaying real-time smart ring telemetry when connected, and
+/// last-recorded values + last-connected timestamp + daily average when offline.
 class VitalsScreen extends ConsumerWidget {
   const VitalsScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final connectionAsync = ref.watch(bleConnectionStateProvider);
     final connectionState =
-        connectionAsync.valueOrNull ?? BleConnectionState.disconnected;
+        ref.watch(bleConnectionStateProvider).valueOrNull ??
+            BleConnectionState.disconnected;
     final isConnected = connectionState == BleConnectionState.connected;
 
-    final heartRate = ref.watch(liveVitalsProvider.select((s) => s.heartRate));
+    final liveHr = ref.watch(liveVitalsProvider.select((s) => s.heartRate));
     final minHr = ref.watch(liveVitalsProvider.select((s) => s.minHeartRate));
     final maxHr = ref.watch(liveVitalsProvider.select((s) => s.maxHeartRate));
     final avgHr = ref.watch(liveVitalsProvider.select((s) => s.avgHeartRate));
@@ -31,7 +31,30 @@ class VitalsScreen extends ConsumerWidget {
     final calmScore = ref.watch(calmScoreProvider).valueOrNull ?? 88;
     final phase = ref.watch(stressPhaseProvider).valueOrNull ??
         StressDetectionPhase.warmingUp;
-    final baseline = ref.watch(stressAnalyzerProvider).currentBaseline;
+    final baseline = ref.watch(baselineHrProvider).valueOrNull;
+
+    final lastSummary = ref.watch(latestHrSummaryProvider).valueOrNull;
+    final dailyAvgs = ref.watch(dailyHrAveragesProvider).valueOrNull;
+    final syncStatus = ref.watch(deviceSyncStatusProvider).valueOrNull;
+
+    final int? shownHr = isConnected ? liveHr : lastSummary?.lastHr;
+    final lastTime = syncStatus?.lastConnectedAt ?? lastSummary?.updatedAt;
+
+    final String hrSubtitle;
+    final String hrTrend;
+    if (isConnected) {
+      hrSubtitle = 'Real-time optical PPG sensor';
+      hrTrend = liveHr != null
+          ? 'Streaming live from R02 ring'
+          : 'Connected — waiting for first pulse lock';
+    } else if (lastTime != null) {
+      hrSubtitle = 'Last recorded heart rate';
+      hrTrend =
+          'Last connected ${DateFormatter.formatRelative(lastTime)} · Tap for trends';
+    } else {
+      hrSubtitle = 'Real-time optical PPG sensor';
+      hrTrend = 'Connect ring to start heart rate streaming';
+    }
 
     return SafeArea(
       bottom: false,
@@ -42,7 +65,6 @@ class VitalsScreen extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const SizedBox(height: 20),
-            // Header with connection status badge
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(
@@ -61,18 +83,16 @@ class VitalsScreen extends ConsumerWidget {
             ),
             const SizedBox(height: 24),
 
-            // Primary Real-Time Heart Rate Card
+            // Primary Heart Rate Card
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: _VitalTile(
                 icon: Icons.favorite_rounded,
                 title: 'Heart Rate',
-                value: heartRate != null ? '$heartRate bpm' : '-- bpm',
-                subtitle: 'Real-time optical PPG sensor',
+                value: shownHr != null ? '$shownHr bpm' : '-- bpm',
+                subtitle: hrSubtitle,
                 color: AppColors.pastelCoral,
-                trend: isConnected
-                    ? 'Streaming live from R02 ring'
-                    : 'Tap to view 24h & weekly history',
+                trend: hrTrend,
                 onTap: () => Navigator.of(context).push(
                   AppRoutes.fadeSlideUp(
                     const VitalDetailsScreen(vitalType: VitalType.heartRate),
@@ -86,22 +106,28 @@ class VitalsScreen extends ConsumerWidget {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: _StressTelemetryCard(
-                calmScore: calmScore,
-                baselineHr: baseline?.round(),
+                calmScore: isConnected ? calmScore : null,
+                baselineHr:
+                    baseline?.round() ?? lastSummary?.restingHr,
                 phase: phase,
                 isConnected: isConnected,
+                lastConnectedAt: lastTime,
               ),
             ),
             const SizedBox(height: 16),
 
-            // Session Heart Rate Summary Grid
+            // Session / Offline Daily Average Stats Grid
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: _SessionStatsCard(
-                minHr: minHr,
-                maxHr: maxHr,
-                avgHr: avgHr,
+                isConnected: isConnected,
+                sessionMinHr: minHr,
+                sessionMaxHr: maxHr,
+                sessionAvgHr: avgHr,
                 baselineHr: baseline?.round(),
+                lastSavedMinHr: lastSummary?.minHr,
+                lastSavedMaxHr: lastSummary?.maxHr,
+                dailyAvgHr: dailyAvgs?.avgDailyHr?.round(),
               ),
             ),
           ],
@@ -163,47 +189,57 @@ class _ConnectionStatusPill extends StatelessWidget {
 }
 
 class _StressTelemetryCard extends StatelessWidget {
-  final int calmScore;
+  final int? calmScore;
   final int? baselineHr;
   final StressDetectionPhase phase;
   final bool isConnected;
+  final DateTime? lastConnectedAt;
 
   const _StressTelemetryCard({
     required this.calmScore,
     required this.baselineHr,
     required this.phase,
     required this.isConnected,
+    required this.lastConnectedAt,
   });
 
   @override
   Widget build(BuildContext context) {
-    final (phaseLabel, phaseColor, phaseIcon) = switch (phase) {
-      StressDetectionPhase.warmingUp => (
-        isConnected ? 'Calibrating 10-min rolling baseline…' : 'Waiting for ring connection',
-        AppColors.pastelTeal,
-        Icons.timelapse_rounded,
-      ),
-      StressDetectionPhase.calm => (
-        'Calm — within normal baseline variability',
-        AppColors.pastelSage,
-        Icons.self_improvement_rounded,
-      ),
-      StressDetectionPhase.elevated => (
-        'Elevated HR — monitoring sustained spike',
-        AppColors.pastelAmber,
-        Icons.trending_up_rounded,
-      ),
-      StressDetectionPhase.stressed => (
-        'Stress Episode Active (≥25% / z≥2.5)',
-        AppColors.pastelCoral,
-        Icons.whatshot_rounded,
-      ),
-      StressDetectionPhase.recovering => (
-        'Recovering — returning to baseline',
-        AppColors.pastelLavender,
-        Icons.favorite_border_rounded,
-      ),
-    };
+    final (phaseLabel, phaseColor, phaseIcon) = isConnected
+        ? switch (phase) {
+            StressDetectionPhase.warmingUp => (
+                'Calibrating 10-min rolling baseline…',
+                AppColors.pastelTeal,
+                Icons.timelapse_rounded,
+              ),
+            StressDetectionPhase.calm => (
+                'Calm — within normal baseline variability',
+                AppColors.pastelSage,
+                Icons.self_improvement_rounded,
+              ),
+            StressDetectionPhase.elevated => (
+                'Elevated HR — monitoring sustained spike',
+                AppColors.pastelAmber,
+                Icons.trending_up_rounded,
+              ),
+            StressDetectionPhase.stressed => (
+                'Stress Episode Active (≥25% / z≥2.5)',
+                AppColors.pastelCoral,
+                Icons.whatshot_rounded,
+              ),
+            StressDetectionPhase.recovering => (
+                'Recovering — returning to baseline',
+                AppColors.pastelLavender,
+                Icons.favorite_border_rounded,
+              ),
+          }
+        : (
+            lastConnectedAt != null
+                ? 'Ring offline · Last synced ${DateFormatter.formatRelative(lastConnectedAt!)}'
+                : 'Waiting for ring connection',
+            AppColors.textSecondary,
+            Icons.bluetooth_disabled_rounded,
+          );
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -243,7 +279,9 @@ class _StressTelemetryCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      'Calm Score $calmScore',
+                      calmScore != null
+                          ? 'Calm Score $calmScore'
+                          : 'Calm Score --',
                       style:
                           Theme.of(context).textTheme.headlineSmall?.copyWith(
                                 fontSize: 22,
@@ -288,20 +326,32 @@ class _StressTelemetryCard extends StatelessWidget {
 }
 
 class _SessionStatsCard extends StatelessWidget {
-  final int? minHr;
-  final int? maxHr;
-  final int? avgHr;
+  final bool isConnected;
+  final int? sessionMinHr;
+  final int? sessionMaxHr;
+  final int? sessionAvgHr;
   final int? baselineHr;
+  final int? lastSavedMinHr;
+  final int? lastSavedMaxHr;
+  final int? dailyAvgHr;
 
   const _SessionStatsCard({
-    required this.minHr,
-    required this.maxHr,
-    required this.avgHr,
+    required this.isConnected,
+    required this.sessionMinHr,
+    required this.sessionMaxHr,
+    required this.sessionAvgHr,
     required this.baselineHr,
+    required this.lastSavedMinHr,
+    required this.lastSavedMaxHr,
+    required this.dailyAvgHr,
   });
 
   @override
   Widget build(BuildContext context) {
+    final avgDisplay = isConnected ? sessionAvgHr : dailyAvgHr;
+    final minDisplay = isConnected ? sessionMinHr : lastSavedMinHr;
+    final maxDisplay = isConnected ? sessionMaxHr : lastSavedMaxHr;
+
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -315,20 +365,43 @@ class _SessionStatsCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Session Telemetry Summary',
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                  color: AppColors.textSecondary,
-                  fontSize: 13,
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                isConnected
+                    ? 'Live Session Summary'
+                    : 'Saved Daily Telemetry',
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      color: AppColors.textSecondary,
+                      fontSize: 13,
+                    ),
+              ),
+              if (dailyAvgHr != null && isConnected)
+                Text(
+                  '7d Avg $dailyAvgHr bpm',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: AppColors.textTertiary,
+                        fontSize: 11,
+                      ),
+                )
+              else if (baselineHr != null)
+                Text(
+                  'Baseline $baselineHr bpm',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: AppColors.textTertiary,
+                        fontSize: 11,
+                      ),
                 ),
+            ],
           ),
           const SizedBox(height: 16),
           Row(
             children: [
               Expanded(
                 child: _MiniStatBox(
-                  label: 'Session Avg',
-                  value: avgHr != null ? '$avgHr' : '--',
+                  label: isConnected ? 'Session Avg' : 'Daily Avg',
+                  value: avgDisplay != null ? '$avgDisplay' : '--',
                   unit: 'bpm',
                   color: AppColors.pastelTeal,
                 ),
@@ -337,7 +410,7 @@ class _SessionStatsCard extends StatelessWidget {
               Expanded(
                 child: _MiniStatBox(
                   label: 'Min HR',
-                  value: minHr != null ? '$minHr' : '--',
+                  value: minDisplay != null ? '$minDisplay' : '--',
                   unit: 'bpm',
                   color: AppColors.pastelSage,
                 ),
@@ -346,7 +419,7 @@ class _SessionStatsCard extends StatelessWidget {
               Expanded(
                 child: _MiniStatBox(
                   label: 'Max HR',
-                  value: maxHr != null ? '$maxHr' : '--',
+                  value: maxDisplay != null ? '$maxDisplay' : '--',
                   unit: 'bpm',
                   color: AppColors.pastelCoral,
                 ),
@@ -469,17 +542,19 @@ class _VitalTile extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    title,
+                    '$title · $subtitle',
                     style: Theme.of(context).textTheme.titleSmall?.copyWith(
                           color: AppColors.textSecondary,
-                          fontSize: 13,
+                          fontSize: 12,
                         ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                   const SizedBox(height: 4),
                   Text(
                     value,
                     style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                          fontSize: 22,
+                          fontSize: 24,
                           fontWeight: FontWeight.w500,
                         ),
                   ),
@@ -487,9 +562,11 @@ class _VitalTile extends StatelessWidget {
                   Text(
                     trend,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: color.withValues(alpha: 0.8),
+                          color: color.withValues(alpha: 0.85),
                           fontSize: 11,
                         ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ],
               ),

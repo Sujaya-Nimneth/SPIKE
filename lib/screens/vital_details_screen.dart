@@ -2,27 +2,28 @@ import 'dart:math';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../theme/app_colors.dart';
+import '../models/daily_hr_summary.dart';
 import '../providers/ble_providers.dart';
+import '../providers/health_sync_providers.dart';
 import '../providers/stress_providers.dart';
 import '../providers/vitals_provider.dart';
 import '../services/ble_service.dart';
+import '../theme/app_colors.dart';
 import '../utils/date_formatter.dart';
 
 enum VitalType {
   heartRate,
-  hrv,
-  bodyTemp,
-  respiratoryRate,
-  spo2,
 }
 
+/// Detailed heart rate view showing live streaming (when connected), last-saved
+/// value + last-connected time + 7-day daily averages (when offline), and real
+/// persisted weekly trend bars.
 class VitalDetailsScreen extends ConsumerStatefulWidget {
   final VitalType vitalType;
 
   const VitalDetailsScreen({
     super.key,
-    required this.vitalType,
+    this.vitalType = VitalType.heartRate,
   });
 
   @override
@@ -41,6 +42,10 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
       vsync: this,
       duration: const Duration(seconds: 2),
     );
+    final initialConn = ref.read(bleConnectionStateProvider).valueOrNull;
+    if (initialConn != null) {
+      _syncPulseAnimation(initialConn);
+    }
   }
 
   void _syncPulseAnimation(BleConnectionState state) {
@@ -63,20 +68,31 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
 
   @override
   Widget build(BuildContext context) {
-    // Watch connection state
-    final connectionAsync = ref.watch(bleConnectionStateProvider);
+    ref.listen<AsyncValue<BleConnectionState>>(
+      bleConnectionStateProvider,
+      (_, next) {
+        final state = next.valueOrNull;
+        if (state != null) {
+          _syncPulseAnimation(state);
+        }
+      },
+    );
+
     final connectionState =
-        connectionAsync.valueOrNull ?? BleConnectionState.disconnected;
+        ref.watch(bleConnectionStateProvider).valueOrNull ??
+            BleConnectionState.disconnected;
     final isConnected = connectionState == BleConnectionState.connected;
 
-    _syncPulseAnimation(connectionState);
-
-    // Watch live vitals and baseline
     final vitals = ref.watch(liveVitalsProvider);
-    final baselineHr = ref.watch(stressAnalyzerProvider).currentBaseline;
+    final baselineHr = ref.watch(baselineHrProvider).valueOrNull;
+    final lastSummary = ref.watch(latestHrSummaryProvider).valueOrNull;
+    final recentSummaries =
+        ref.watch(recentHrSummariesProvider).valueOrNull ?? const [];
+    final dailyAvgs = ref.watch(dailyHrAveragesProvider).valueOrNull;
+    final syncStatus = ref.watch(deviceSyncStatusProvider).valueOrNull;
 
-    // Get config for the selected vital type
-    final config = _getVitalConfig(widget.vitalType, vitals, baselineHr);
+    final int? displayHr = isConnected ? vitals.heartRate : lastSummary?.lastHr;
+    final lastTime = syncStatus?.lastConnectedAt ?? lastSummary?.updatedAt;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -87,30 +103,36 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // ── Top Bar ──────────────────────────────────────────
-              _buildTopBar(context, config, connectionState),
+              _buildTopBar(context, connectionState),
               const SizedBox(height: 24),
-
-              // ── Hero Vital Value ──────────────────────────────────
-              _buildHeroCard(context, config, isConnected),
-              const SizedBox(height: 24),
-
-              // ── Timeframe Selector ───────────────────────────────
-              _buildTimeframeSelector(),
-              const SizedBox(height: 20),
-
-              // ── Visualization Chart ──────────────────────────────
-              RepaintBoundary(
-                child: _buildChartSection(context, config, isConnected),
+              _buildHeroCard(
+                context,
+                displayHr: displayHr,
+                isConnected: isConnected,
+                lastConnectedAt: lastTime,
               ),
               const SizedBox(height: 24),
-
-              // ── Key Statistics Grid ──────────────────────────────
-              _buildStatsGrid(context, config),
+              _buildTimeframeSelector(),
+              const SizedBox(height: 20),
+              RepaintBoundary(
+                child: _buildChartSection(
+                  context,
+                  isConnected: isConnected,
+                  liveHistory: vitals.heartRateHistory,
+                  recentSummaries: recentSummaries,
+                ),
+              ),
               const SizedBox(height: 24),
-
-              // ── Educational Insight ──────────────────────────────
-              _buildInsightCard(context, config),
+              _buildStatsGrid(
+                context,
+                isConnected: isConnected,
+                vitals: vitals,
+                baselineHr: baselineHr?.round(),
+                lastSummary: lastSummary,
+                dailyAvgHr: dailyAvgs?.avgDailyHr?.round(),
+              ),
+              const SizedBox(height: 24),
+              _buildInsightCard(context),
               const SizedBox(height: 40),
             ],
           ),
@@ -119,7 +141,7 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
     );
   }
 
-  Widget _buildTopBar(BuildContext context, _VitalConfig config, BleConnectionState connectionState) {
+  Widget _buildTopBar(BuildContext context, BleConnectionState connectionState) {
     return Row(
       children: [
         GestureDetector(
@@ -132,45 +154,35 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: AppColors.cardBorder, width: 0.5),
             ),
-            child: const Icon(Icons.arrow_back_ios_new_rounded, color: AppColors.textPrimary, size: 16),
+            child: const Icon(
+              Icons.arrow_back_ios_new_rounded,
+              color: AppColors.textPrimary,
+              size: 16,
+            ),
           ),
         ),
         const Spacer(),
         Text(
-          config.title,
+          'Heart Rate',
           style: Theme.of(context).textTheme.headlineMedium?.copyWith(
                 fontWeight: FontWeight.w600,
                 fontSize: 18,
               ),
         ),
         const Spacer(),
-        // Pulse indicator
         _buildConnectionBadge(connectionState),
       ],
     );
   }
 
   Widget _buildConnectionBadge(BleConnectionState state) {
-    Color badgeColor;
-    String label;
-    bool pulse = false;
-
-    switch (state) {
-      case BleConnectionState.connected:
-        badgeColor = AppColors.pastelSage;
-        label = 'Live';
-        pulse = true;
-        break;
-      case BleConnectionState.scanning:
-      case BleConnectionState.connecting:
-        badgeColor = AppColors.pastelAmber;
-        label = 'Syncing';
-        pulse = true;
-        break;
-      default:
-        badgeColor = AppColors.textTertiary;
-        label = 'Offline';
-    }
+    final (badgeColor, label, pulse) = switch (state) {
+      BleConnectionState.connected => (AppColors.pastelSage, 'Live', true),
+      BleConnectionState.scanning ||
+      BleConnectionState.connecting =>
+        (AppColors.pastelAmber, 'Syncing', true),
+      _ => (AppColors.textTertiary, 'Offline', false),
+    };
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -191,11 +203,15 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
                   height: 6,
                   margin: const EdgeInsets.only(right: 6),
                   decoration: BoxDecoration(
-                    color: badgeColor.withValues(alpha: 1.0 - _pulseController.value * 0.4),
+                    color: badgeColor.withValues(
+                      alpha: 1.0 - _pulseController.value * 0.4,
+                    ),
                     shape: BoxShape.circle,
                     boxShadow: [
                       BoxShadow(
-                        color: badgeColor.withValues(alpha: 0.6 * (1.0 - _pulseController.value)),
+                        color: badgeColor.withValues(
+                          alpha: 0.6 * (1.0 - _pulseController.value),
+                        ),
                         blurRadius: 4 + _pulseController.value * 6,
                         spreadRadius: _pulseController.value * 2,
                       ),
@@ -228,7 +244,18 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
     );
   }
 
-  Widget _buildHeroCard(BuildContext context, _VitalConfig config, bool isConnected) {
+  Widget _buildHeroCard(
+    BuildContext context, {
+    required int? displayHr,
+    required bool isConnected,
+    required DateTime? lastConnectedAt,
+  }) {
+    final trendText = isConnected
+        ? 'Live optical pulse from R02 ring'
+        : (lastConnectedAt != null
+            ? 'Last connected ${DateFormatter.formatShortDateTime(lastConnectedAt)}'
+            : 'Connect ring to record live heart rate');
+
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
@@ -236,16 +263,18 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
-            config.color.withValues(alpha: 0.08),
+            AppColors.pastelCoral.withValues(alpha: 0.08),
             AppColors.surface,
           ],
         ),
         borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: config.color.withValues(alpha: 0.15), width: 0.5),
+        border: Border.all(
+          color: AppColors.pastelCoral.withValues(alpha: 0.15),
+          width: 0.5,
+        ),
       ),
       child: Row(
         children: [
-          // Icon with live pulse ring
           Stack(
             alignment: Alignment.center,
             children: [
@@ -257,10 +286,14 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
                       width: 72 + _pulseController.value * 24,
                       height: 72 + _pulseController.value * 24,
                       decoration: BoxDecoration(
-                        color: config.color.withValues(alpha: 0.03 * (1.0 - _pulseController.value)),
+                        color: AppColors.pastelCoral.withValues(
+                          alpha: 0.03 * (1.0 - _pulseController.value),
+                        ),
                         shape: BoxShape.circle,
                         border: Border.all(
-                          color: config.color.withValues(alpha: 0.15 * (1.0 - _pulseController.value)),
+                          color: AppColors.pastelCoral.withValues(
+                            alpha: 0.15 * (1.0 - _pulseController.value),
+                          ),
                           width: 1,
                         ),
                       ),
@@ -271,15 +304,18 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
                 width: 60,
                 height: 60,
                 decoration: BoxDecoration(
-                  color: config.color.withValues(alpha: 0.12),
+                  color: AppColors.pastelCoral.withValues(alpha: 0.12),
                   shape: BoxShape.circle,
                 ),
-                child: Icon(config.icon, color: config.color, size: 28),
+                child: const Icon(
+                  Icons.favorite_rounded,
+                  color: AppColors.pastelCoral,
+                  size: 28,
+                ),
               ),
             ],
           ),
           const SizedBox(width: 24),
-          // Value & trend
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -289,7 +325,7 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
                   textBaseline: TextBaseline.alphabetic,
                   children: [
                     Text(
-                      config.valueString,
+                      displayHr != null ? '$displayHr' : '--',
                       style: Theme.of(context).textTheme.displayLarge?.copyWith(
                             fontSize: 48,
                             fontWeight: FontWeight.w600,
@@ -298,7 +334,7 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
                     ),
                     const SizedBox(width: 6),
                     Text(
-                      config.unit,
+                      'bpm',
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
                             color: AppColors.textSecondary,
                             fontWeight: FontWeight.w400,
@@ -308,9 +344,9 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  config.trendText,
+                  trendText,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: config.color.withValues(alpha: 0.8),
+                        color: AppColors.pastelCoral.withValues(alpha: 0.85),
                         fontSize: 12,
                         fontWeight: FontWeight.w500,
                       ),
@@ -344,9 +380,11 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
                 ),
                 alignment: Alignment.center,
                 child: Text(
-                  'Live / Today',
+                  'Live Session',
                   style: TextStyle(
-                    color: !_isWeekly ? AppColors.textPrimary : AppColors.textSecondary,
+                    color: !_isWeekly
+                        ? AppColors.textPrimary
+                        : AppColors.textSecondary,
                     fontWeight: !_isWeekly ? FontWeight.w600 : FontWeight.w400,
                     fontSize: 13,
                   ),
@@ -364,9 +402,11 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
                 ),
                 alignment: Alignment.center,
                 child: Text(
-                  'Weekly Trends',
+                  'Daily Averages',
                   style: TextStyle(
-                    color: _isWeekly ? AppColors.textPrimary : AppColors.textSecondary,
+                    color: _isWeekly
+                        ? AppColors.textPrimary
+                        : AppColors.textSecondary,
                     fontWeight: _isWeekly ? FontWeight.w600 : FontWeight.w400,
                     fontSize: 13,
                   ),
@@ -379,7 +419,12 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
     );
   }
 
-  Widget _buildChartSection(BuildContext context, _VitalConfig config, bool isConnected) {
+  Widget _buildChartSection(
+    BuildContext context, {
+    required bool isConnected,
+    required List<VitalSample> liveHistory,
+    required List<DailyHrSummary> recentSummaries,
+  }) {
     return Container(
       height: 250,
       padding: const EdgeInsets.all(20),
@@ -392,7 +437,9 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            _isWeekly ? 'Weekly Averages' : (isConnected ? 'Real-Time Streaming' : 'Today\'s Activity'),
+            _isWeekly
+                ? '7-Day Daily Average BPM'
+                : (isConnected ? 'Real-Time Streaming' : 'Live Stream Offline'),
             style: Theme.of(context).textTheme.titleSmall?.copyWith(
                   color: AppColors.textSecondary,
                   fontSize: 12,
@@ -400,65 +447,62 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
           ),
           const SizedBox(height: 20),
           Expanded(
-            child: _isWeekly ? _buildWeeklyChart(config) : _buildLiveChart(config, isConnected),
+            child: _isWeekly
+                ? _buildWeeklyChart(context, recentSummaries)
+                : _buildLiveChart(context, liveHistory, isConnected),
           ),
-          if (!_isWeekly && !isConnected) ...[
-            const SizedBox(height: 12),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: ['12 AM', '6 AM', '12 PM', '6 PM', '12 AM']
-                  .map(
-                    (t) => Text(
-                      t,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            fontSize: 10,
-                            color: AppColors.textTertiary,
-                          ),
-                    ),
-                  )
-                  .toList(),
-            ),
-          ]
         ],
       ),
     );
   }
 
-  Widget _buildLiveChart(_VitalConfig config, bool isConnected) {
-    final List<FlSpot> spots;
-    if (isConnected) {
-      if (config.liveHistory.isEmpty) {
-        return const Center(child: Text('No data recorded yet'));
-      }
-      spots = config.liveHistory.asMap().entries.map((entry) {
-        return FlSpot(entry.key.toDouble(), entry.value.value);
-      }).toList();
-    } else {
-      spots = config.todayCurve;
+  Widget _buildLiveChart(
+    BuildContext context,
+    List<VitalSample> liveHistory,
+    bool isConnected,
+  ) {
+    if (!isConnected) {
+      return Center(
+        child: Text(
+          'Ring is offline. Connect your R02 ring to stream live BPM, or switch to Daily Averages to view saved history.',
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: AppColors.textSecondary,
+                height: 1.4,
+              ),
+        ),
+      );
     }
 
-    // Auto-scale X and Y axes
+    if (liveHistory.isEmpty) {
+      return Center(
+        child: Text(
+          'Waiting for first heart rate reading…',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: AppColors.textSecondary,
+              ),
+        ),
+      );
+    }
+
+    final spots = liveHistory.asMap().entries.map((entry) {
+      return FlSpot(entry.key.toDouble(), entry.value.value);
+    }).toList();
+
     final yValues = spots.map((e) => e.y).toList();
     double minY = yValues.reduce(min);
     double maxY = yValues.reduce(max);
     final range = maxY - minY;
-    
-    // Add padded boundary spacing
-    final padding = range > 0 ? range * 0.15 : 4.0;
-    minY = (minY - padding).clamp(config.hardMinY, config.hardMaxY);
-    maxY = (maxY + padding).clamp(config.hardMinY, config.hardMaxY);
-
-    if (maxY - minY < 2.0) {
-      minY -= 1.0;
-      maxY += 1.0;
-    }
+    final padding = range > 0 ? range * 0.15 : 6.0;
+    minY = (minY - padding).clamp(35.0, 200.0);
+    maxY = (maxY + padding).clamp(minY + 4.0, 220.0);
 
     return LineChart(
       LineChartData(
         gridData: FlGridData(
           show: true,
           drawVerticalLine: false,
-          horizontalInterval: ((maxY - minY) / 4).clamp(1.0, 50.0),
+          horizontalInterval: ((maxY - minY) / 4).clamp(2.0, 50.0),
           getDrawingHorizontalLine: (value) => const FlLine(
             color: AppColors.surfaceVariant,
             strokeWidth: 0.5,
@@ -467,7 +511,7 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
         titlesData: const FlTitlesData(show: false),
         borderData: FlBorderData(show: false),
         minX: 0,
-        maxX: (spots.length - 1).toDouble().clamp(1.0, 23.0),
+        maxX: max(1.0, (spots.length - 1).toDouble()),
         minY: minY,
         maxY: maxY,
         lineTouchData: LineTouchData(
@@ -478,9 +522,9 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
             getTooltipItems: (touchedSpots) {
               return touchedSpots.map((spot) {
                 return LineTooltipItem(
-                  '${spot.y.toStringAsFixed(config.decimalDigits)} ${config.unit}',
-                  TextStyle(
-                    color: config.color,
+                  '${spot.y.round()} bpm',
+                  const TextStyle(
+                    color: AppColors.pastelCoral,
                     fontWeight: FontWeight.w600,
                     fontSize: 12,
                   ),
@@ -492,21 +536,21 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
         lineBarsData: [
           LineChartBarData(
             spots: spots,
-            isCurved: true,
+            isCurved: spots.length > 2,
             curveSmoothness: 0.25,
-            color: config.color,
+            color: AppColors.pastelCoral,
             barWidth: 2,
             isStrokeCapRound: true,
-            dotData: const FlDotData(show: false),
+            dotData: FlDotData(show: spots.length == 1),
             belowBarData: BarAreaData(
               show: true,
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
                 colors: [
-                  config.color.withValues(alpha: 0.2),
-                  config.color.withValues(alpha: 0.02),
-                  config.color.withValues(alpha: 0.0),
+                  AppColors.pastelCoral.withValues(alpha: 0.2),
+                  AppColors.pastelCoral.withValues(alpha: 0.02),
+                  AppColors.pastelCoral.withValues(alpha: 0.0),
                 ],
               ),
             ),
@@ -516,20 +560,34 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
     );
   }
 
-  Widget _buildWeeklyChart(_VitalConfig config) {
-    final values = config.weeklyAverages;
-    final barGroups = List.generate(values.length, (index) {
+  Widget _buildWeeklyChart(
+    BuildContext context,
+    List<DailyHrSummary> recentSummaries,
+  ) {
+    if (recentSummaries.isEmpty) {
+      return Center(
+        child: Text(
+          'No daily heart rate averages recorded yet.',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: AppColors.textSecondary,
+              ),
+        ),
+      );
+    }
+
+    final chronological = recentSummaries.reversed.toList();
+    final barGroups = List.generate(chronological.length, (index) {
       return BarChartGroupData(
         x: index,
         barRods: [
           BarChartRodData(
-            toY: values[index],
-            color: config.color,
-            width: 14,
+            toY: chronological[index].avgHr,
+            color: AppColors.pastelCoral,
+            width: 16,
             borderRadius: BorderRadius.circular(4),
             backDrawRodData: BackgroundBarChartRodData(
               show: true,
-              toY: config.hardMaxY,
+              toY: 140,
               color: AppColors.surfaceVariant,
             ),
           ),
@@ -537,16 +595,16 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
       );
     });
 
-    final days = DateFormatter.lastSevenDayLabels();
-
     return BarChart(
       BarChartData(
+        minY: 40,
+        maxY: 140,
         barGroups: barGroups,
         borderData: FlBorderData(show: false),
         gridData: FlGridData(
           show: true,
           drawVerticalLine: false,
-          horizontalInterval: ((config.hardMaxY - config.hardMinY) / 4).clamp(1.0, 50.0),
+          horizontalInterval: 25,
           getDrawingHorizontalLine: (value) => const FlLine(
             color: AppColors.surfaceVariant,
             strokeWidth: 0.5,
@@ -555,18 +613,25 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
         titlesData: FlTitlesData(
           show: true,
           topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-          rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-          leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          rightTitles:
+              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          leftTitles:
+              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
           bottomTitles: AxisTitles(
             sideTitles: SideTitles(
               showTitles: true,
               getTitlesWidget: (double value, TitleMeta meta) {
-                final int index = value.toInt();
-                if (index < 0 || index >= days.length) return const SizedBox();
+                final index = value.toInt();
+                if (index < 0 || index >= chronological.length) {
+                  return const SizedBox();
+                }
+                final dateStr = chronological[index].date;
+                final shortLabel =
+                    dateStr.length >= 10 ? dateStr.substring(5) : dateStr;
                 return Padding(
                   padding: const EdgeInsets.only(top: 8),
                   child: Text(
-                    days[index],
+                    shortLabel,
                     style: const TextStyle(
                       color: AppColors.textTertiary,
                       fontSize: 10,
@@ -584,9 +649,9 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
             tooltipRoundedRadius: 10,
             getTooltipItem: (group, groupIndex, rod, rodIndex) {
               return BarTooltipItem(
-                '${rod.toY.toStringAsFixed(config.decimalDigits)} ${config.unit}',
-                TextStyle(
-                  color: config.color,
+                '${rod.toY.round()} bpm avg',
+                const TextStyle(
+                  color: AppColors.pastelCoral,
                   fontWeight: FontWeight.w600,
                   fontSize: 12,
                 ),
@@ -598,7 +663,32 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
     );
   }
 
-  Widget _buildStatsGrid(BuildContext context, _VitalConfig config) {
+  Widget _buildStatsGrid(
+    BuildContext context, {
+    required bool isConnected,
+    required LiveVitalsState vitals,
+    required int? baselineHr,
+    required DailyHrSummary? lastSummary,
+    required int? dailyAvgHr,
+  }) {
+    final avgVal = isConnected
+        ? (vitals.avgHeartRate ?? dailyAvgHr)
+        : dailyAvgHr;
+    final minVal = isConnected ? vitals.minHeartRate : lastSummary?.minHr;
+    final maxVal = isConnected ? vitals.maxHeartRate : lastSummary?.maxHr;
+    final baseVal = baselineHr ?? lastSummary?.restingHr;
+
+    final stats = [
+      _StatItem(
+        isConnected ? 'Session Avg' : '7d Daily Avg',
+        avgVal != null ? '$avgVal' : '--',
+        'bpm',
+      ),
+      _StatItem('Min HR', minVal != null ? '$minVal' : '--', 'bpm'),
+      _StatItem('Max HR', maxVal != null ? '$maxVal' : '--', 'bpm'),
+      _StatItem('Baseline HR', baseVal != null ? '$baseVal' : '--', 'bpm'),
+    ];
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -617,7 +707,7 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
           crossAxisSpacing: 12,
           mainAxisSpacing: 12,
           childAspectRatio: 1.6,
-          children: config.stats.map((stat) {
+          children: stats.map((stat) {
             return Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
@@ -668,7 +758,7 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
     );
   }
 
-  Widget _buildInsightCard(BuildContext context, _VitalConfig config) {
+  Widget _buildInsightCard(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -676,19 +766,26 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
-            config.color.withValues(alpha: 0.05),
+            AppColors.pastelCoral.withValues(alpha: 0.05),
             AppColors.surface,
           ],
         ),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: config.color.withValues(alpha: 0.12), width: 0.5),
+        border: Border.all(
+          color: AppColors.pastelCoral.withValues(alpha: 0.12),
+          width: 0.5,
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(Icons.info_outline_rounded, color: config.color, size: 20),
+              const Icon(
+                Icons.info_outline_rounded,
+                color: AppColors.pastelCoral,
+                size: 20,
+              ),
               const SizedBox(width: 10),
               Text(
                 'Clinical Context',
@@ -702,7 +799,7 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
           ),
           const SizedBox(height: 14),
           Text(
-            config.description,
+            'Your heart rate baseline is computed using a spike-frozen 10-minute rolling median and MAD. Sustained rises above 1.25× baseline or z ≥ 2.5 for 2+ minutes are logged as stress episodes.',
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   height: 1.5,
                   color: AppColors.textSecondary,
@@ -712,193 +809,11 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
       ),
     );
   }
-
-  _VitalConfig _getVitalConfig(
-    VitalType type,
-    LiveVitalsState vitals,
-    double? baselineHr,
-  ) {
-    switch (type) {
-      case VitalType.heartRate:
-        final avgVal = vitals.avgHeartRate ?? vitals.heartRate;
-        final minVal = vitals.minHeartRate ?? 58;
-        final maxVal = vitals.maxHeartRate ?? 112;
-        final baseVal = baselineHr?.round() ?? 62;
-        return _VitalConfig(
-          title: 'Heart Rate',
-          valueString: '${vitals.heartRate ?? '--'}',
-          unit: 'bpm',
-          color: AppColors.pastelCoral,
-          icon: Icons.favorite_rounded,
-          trendText: 'Live resting pulse from ring',
-          liveHistory: vitals.heartRateHistory,
-          todayCurve: const [
-            FlSpot(0, 62), FlSpot(1, 58), FlSpot(2, 55), FlSpot(3, 54), FlSpot(4, 56), FlSpot(5, 52),
-            FlSpot(6, 58), FlSpot(7, 65), FlSpot(8, 72), FlSpot(9, 78), FlSpot(10, 82), FlSpot(11, 76),
-            FlSpot(12, 80), FlSpot(13, 85), FlSpot(14, 78), FlSpot(15, 74), FlSpot(16, 70), FlSpot(17, 76),
-            FlSpot(18, 82), FlSpot(19, 79), FlSpot(20, 75), FlSpot(21, 70), FlSpot(22, 65), FlSpot(23, 62),
-          ],
-          weeklyAverages: const [71, 73, 70, 72, 74, 71, 72],
-          hardMinY: 40,
-          hardMaxY: 120,
-          decimalDigits: 0,
-          description: 'Your heart rate measures the number of times your heart beats per minute. A lower resting heart rate typically indicates better cardiovascular efficiency and physical conditioning.',
-          stats: [
-            _StatItem('Session Avg', '${avgVal ?? '--'}', 'bpm'),
-            _StatItem('Min HR', '$minVal', 'bpm'),
-            _StatItem('Max HR', '$maxVal', 'bpm'),
-            _StatItem('Baseline HR', '$baseVal', 'bpm'),
-          ],
-        );
-      case VitalType.hrv:
-        return _VitalConfig(
-          title: 'HRV',
-          valueString: '${vitals.hrv}',
-          unit: 'ms',
-          color: AppColors.pastelSage,
-          icon: Icons.show_chart_rounded,
-          trendText: 'Heart rate variability telemetry',
-          liveHistory: vitals.hrvHistory,
-          todayCurve: const [
-            FlSpot(0, 42), FlSpot(1, 45), FlSpot(2, 48), FlSpot(3, 46), FlSpot(4, 44), FlSpot(5, 45),
-            FlSpot(6, 42), FlSpot(7, 40), FlSpot(8, 43), FlSpot(9, 45), FlSpot(10, 46), FlSpot(11, 45),
-            FlSpot(12, 44), FlSpot(13, 42), FlSpot(14, 45), FlSpot(15, 47), FlSpot(16, 46), FlSpot(17, 45),
-            FlSpot(18, 44), FlSpot(19, 43), FlSpot(20, 45), FlSpot(21, 46), FlSpot(22, 44), FlSpot(23, 45),
-          ],
-          weeklyAverages: [44, 46, 43, 45, 47, 45, 46],
-          hardMinY: 20,
-          hardMaxY: 80,
-          decimalDigits: 0,
-          description: 'Heart Rate Variability (HRV) is the variation in milliseconds between consecutive heartbeats. Higher HRV is typically associated with better recovery, lower stress, and a well-rested state.',
-          stats: [
-            _StatItem('Avg HRV', '${vitals.hrv}', 'ms'),
-            _StatItem('Max HRV', '74', 'ms'),
-            _StatItem('Resting baseline', '44', 'ms'),
-            _StatItem('Recovery Status', 'Optimal', ''),
-          ],
-        );
-      case VitalType.bodyTemp:
-        return _VitalConfig(
-          title: 'Body Temperature',
-          valueString: '${vitals.bodyTempDeviation >= 0 ? '+' : ''}${vitals.bodyTempDeviation.toStringAsFixed(2)}',
-          unit: '°C',
-          color: AppColors.pastelAmber,
-          icon: Icons.thermostat_rounded,
-          trendText: 'Deviation from baseline threshold',
-          liveHistory: vitals.bodyTempHistory,
-          todayCurve: const [
-            FlSpot(0, 0.15), FlSpot(1, 0.18), FlSpot(2, 0.22), FlSpot(3, 0.25), FlSpot(4, 0.20), FlSpot(5, 0.15),
-            FlSpot(6, 0.10), FlSpot(7, 0.12), FlSpot(8, 0.18), FlSpot(9, 0.25), FlSpot(10, 0.28), FlSpot(11, 0.24),
-            FlSpot(12, 0.20), FlSpot(13, 0.18), FlSpot(14, 0.22), FlSpot(15, 0.25), FlSpot(16, 0.24), FlSpot(17, 0.20),
-            FlSpot(18, 0.18), FlSpot(19, 0.15), FlSpot(20, 0.16), FlSpot(21, 0.20), FlSpot(22, 0.18), FlSpot(23, 0.20),
-          ],
-          weeklyAverages: [0.1, 0.2, 0.15, 0.3, 0.2, 0.18, 0.22],
-          hardMinY: -1.0,
-          hardMaxY: 1.0,
-          decimalDigits: 2,
-          description: 'Body temperature deviation tracks fluctuations relative to your baseline sleeping temperature. Slight deviations can indicate recovery cycles, training fatigue, or changes in sleep environment.',
-          stats: [
-            _StatItem('Sleep Deviation', '${vitals.bodyTempDeviation >= 0 ? '+' : ''}${vitals.bodyTempDeviation.toStringAsFixed(2)}', '°C'),
-            _StatItem('Baseline Temp', '36.5', '°C'),
-            _StatItem('Max Deviation', '+0.32', '°C'),
-            _StatItem('Temperature Status', 'Normal', ''),
-          ],
-        );
-      case VitalType.respiratoryRate:
-        return _VitalConfig(
-          title: 'Respiratory Rate',
-          valueString: vitals.respiratoryRate.toStringAsFixed(1),
-          unit: 'Br/Min',
-          color: AppColors.pastelBlue,
-          icon: Icons.air_rounded,
-          trendText: 'Breaths per minute sleeping avg',
-          liveHistory: vitals.respiratoryRateHistory,
-          todayCurve: const [
-            FlSpot(0, 15.0), FlSpot(1, 15.2), FlSpot(2, 15.4), FlSpot(3, 15.1), FlSpot(4, 14.9), FlSpot(5, 15.0),
-            FlSpot(6, 15.2), FlSpot(7, 15.5), FlSpot(8, 15.3), FlSpot(9, 15.1), FlSpot(10, 15.0), FlSpot(11, 15.2),
-            FlSpot(12, 15.4), FlSpot(13, 15.3), FlSpot(14, 15.1), FlSpot(15, 14.8), FlSpot(16, 15.0), FlSpot(17, 15.2),
-            FlSpot(18, 15.4), FlSpot(19, 15.2), FlSpot(20, 15.1), FlSpot(21, 15.3), FlSpot(22, 15.1), FlSpot(23, 15.2),
-          ],
-          weeklyAverages: [15.1, 15.3, 15.0, 15.2, 15.4, 15.1, 15.2],
-          hardMinY: 10,
-          hardMaxY: 20,
-          decimalDigits: 1,
-          description: 'Respiratory rate tracks your breaths per minute during periods of rest and sleep. It is typically very stable; increases can point to physical exertion, environmental allergens, or initial signs of illness.',
-          stats: [
-            _StatItem('Avg Respiration', vitals.respiratoryRate.toStringAsFixed(1), 'Br/Min'),
-            _StatItem('Sleep Min', '13.8', 'Br/Min'),
-            _StatItem('Sleep Max', '17.2', 'Br/Min'),
-            _StatItem('Stability Index', 'High', ''),
-          ],
-        );
-      case VitalType.spo2:
-        return _VitalConfig(
-          title: 'SpO2',
-          valueString: '${vitals.spo2}',
-          unit: '%',
-          color: AppColors.pastelLavender,
-          icon: Icons.water_drop_rounded,
-          trendText: 'Blood oxygen saturation range',
-          liveHistory: vitals.spo2History,
-          todayCurve: const [
-            FlSpot(0, 97), FlSpot(1, 97), FlSpot(2, 96), FlSpot(3, 97), FlSpot(4, 98), FlSpot(5, 97),
-            FlSpot(6, 97), FlSpot(7, 96), FlSpot(8, 97), FlSpot(9, 97), FlSpot(10, 98), FlSpot(11, 97),
-            FlSpot(12, 97), FlSpot(13, 96), FlSpot(14, 97), FlSpot(15, 97), FlSpot(16, 98), FlSpot(17, 97),
-            FlSpot(18, 97), FlSpot(19, 97), FlSpot(20, 96), FlSpot(21, 97), FlSpot(22, 98), FlSpot(23, 97),
-          ],
-          weeklyAverages: [97, 97, 96.8, 97.4, 97.1, 97.2, 97.3],
-          hardMinY: 90,
-          hardMaxY: 100,
-          decimalDigits: 0,
-          description: 'SpO2 represents the percentage of oxygen-saturated hemoglobin in your blood. Readings between 95% and 100% are indicative of healthy arterial blood oxygenation levels.',
-          stats: [
-            _StatItem('Oxygen Level', '${vitals.spo2}', '%'),
-            _StatItem('Sleep Low SpO2', '94', '%'),
-            _StatItem('Sleep Avg SpO2', '97.2', '%'),
-            _StatItem('Status', 'Healthy', ''),
-          ],
-        );
-    }
-  }
 }
 
 class _StatItem {
   final String label;
   final String value;
   final String unit;
-  _StatItem(this.label, this.value, this.unit);
-}
-
-class _VitalConfig {
-  final String title;
-  final String valueString;
-  final String unit;
-  final Color color;
-  final IconData icon;
-  final String trendText;
-  final List<VitalSample> liveHistory;
-  final List<FlSpot> todayCurve;
-  final List<double> weeklyAverages;
-  final double hardMinY;
-  final double hardMaxY;
-  final int decimalDigits;
-  final String description;
-  final List<_StatItem> stats;
-
-  _VitalConfig({
-    required this.title,
-    required this.valueString,
-    required this.unit,
-    required this.color,
-    required this.icon,
-    required this.trendText,
-    required this.liveHistory,
-    required this.todayCurve,
-    required this.weeklyAverages,
-    required this.hardMinY,
-    required this.hardMaxY,
-    required this.decimalDigits,
-    required this.description,
-    required this.stats,
-  });
+  const _StatItem(this.label, this.value, this.unit);
 }

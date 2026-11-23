@@ -46,11 +46,18 @@ class DateFormatter {
 
   /// Formats a timestamp as e.g. "Oct 17 · 2:30 PM".
   static String formatShortDateTime(DateTime date) {
-    final month = _shortMonths[(date.month - 1).clamp(0, 11)];
-    final hour12 = date.hour % 12 == 0 ? 12 : date.hour % 12;
-    final minute = date.minute.toString().padLeft(2, '0');
-    final period = date.hour >= 12 ? 'PM' : 'AM';
-    return '$month ${date.day} · $hour12:$minute $period';
+    final local = date.toLocal();
+    final month = _shortMonths[(local.month - 1).clamp(0, 11)];
+    return '$month ${local.day} · ${formatClockTime(local)}';
+  }
+
+  /// Formats a local clock time as e.g. "2:30 PM".
+  static String formatClockTime(DateTime date) {
+    final local = date.toLocal();
+    final hour12 = local.hour % 12 == 0 ? 12 : local.hour % 12;
+    final minute = local.minute.toString().padLeft(2, '0');
+    final period = local.hour >= 12 ? 'PM' : 'AM';
+    return '$hour12:$minute $period';
   }
 
   /// Formats a relative time string such as "Just now", "12m ago", "3h ago", "2d ago".

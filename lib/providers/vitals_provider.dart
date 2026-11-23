@@ -21,30 +21,12 @@ class LiveVitalsState {
   final int? avgHeartRate;
   final List<VitalSample> heartRateHistory;
 
-  // Compatibility fields removed in Phase 4 UI cleanup
-  final int hrv;
-  final double bodyTempDeviation;
-  final double respiratoryRate;
-  final int spo2;
-  final List<VitalSample> hrvHistory;
-  final List<VitalSample> bodyTempHistory;
-  final List<VitalSample> respiratoryRateHistory;
-  final List<VitalSample> spo2History;
-
   const LiveVitalsState({
     this.heartRate,
     this.minHeartRate,
     this.maxHeartRate,
     this.avgHeartRate,
     required this.heartRateHistory,
-    this.hrv = 45,
-    this.bodyTempDeviation = 0.2,
-    this.respiratoryRate = 15.2,
-    this.spo2 = 97,
-    this.hrvHistory = const [],
-    this.bodyTempHistory = const [],
-    this.respiratoryRateHistory = const [],
-    this.spo2History = const [],
   });
 
   factory LiveVitalsState.initial() {
@@ -68,14 +50,6 @@ class LiveVitalsState {
       maxHeartRate: maxHeartRate ?? this.maxHeartRate,
       avgHeartRate: avgHeartRate ?? this.avgHeartRate,
       heartRateHistory: heartRateHistory ?? this.heartRateHistory,
-      hrv: hrv,
-      bodyTempDeviation: bodyTempDeviation,
-      respiratoryRate: respiratoryRate,
-      spo2: spo2,
-      hrvHistory: hrvHistory,
-      bodyTempHistory: bodyTempHistory,
-      respiratoryRateHistory: respiratoryRateHistory,
-      spo2History: spo2History,
     );
   }
 }
