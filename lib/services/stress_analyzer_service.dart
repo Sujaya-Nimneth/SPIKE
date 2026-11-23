@@ -7,15 +7,6 @@ import 'stress/stress_detector.dart';
 
 /// Orchestrates real-time heart rate stress analysis using the v2
 /// [StressDetector] pipeline and persists detected episodes to [DatabaseService].
-///
-/// Pipeline:
-/// 1. [HrSignalFilter]: range validation (35–210 BPM), slew-rate artifact
-///    rejection, and 5-sample median smoothing.
-/// 2. [BaselineEstimator]: 10-minute rolling median + MAD baseline that
-///    freezes updates during elevated HR so spikes never self-contaminate.
-/// 3. [StressScorer]: z-score + ratio evaluation and EMA-smoothed Calm Score.
-/// 4. [StressDetector]: hysteresis state machine requiring >= 80% elevated
-///    duty cycle over 2 minutes before confirming a stress episode.
 class StressAnalyzerService {
   static const _tag = 'StressAnalyzer';
 
@@ -34,11 +25,15 @@ class StressAnalyzerService {
   final _eventController = StreamController<StressEvent>.broadcast();
   final _calmScoreController = StreamController<int>.broadcast();
   final _phaseController = StreamController<StressDetectionPhase>.broadcast();
+  final _baselineController = StreamController<double?>.broadcast();
 
   bool _isRunning = false;
-  bool _isTriggering = false;
   int _lastEmittedCalmScore = 88;
   StressDetectionPhase _lastEmittedPhase = StressDetectionPhase.warmingUp;
+  double? _lastEmittedBaseline;
+
+  int? _activePersistedEventId;
+  Future<void> _dbOpQueue = Future<void>.value();
 
   StreamSubscription<int>? _hrSubscription;
 
@@ -52,6 +47,9 @@ class StressAnalyzerService {
 
   /// Stream of detector phase transitions.
   Stream<StressDetectionPhase> get phaseStream => _phaseController.stream;
+
+  /// Stream of rolling median baseline BPM updates (`null` while calibrating).
+  Stream<double?> get baselineStream => _baselineController.stream;
 
   /// Whether the analyzer is actively subscribed to a heart rate stream.
   bool get isRunning => _isRunning;
@@ -81,6 +79,13 @@ class StressAnalyzerService {
     );
   }
 
+  /// Reset the stress detector state and baseline calibration.
+  void resetDetector() {
+    _detector.reset();
+    _activePersistedEventId = null;
+    _emitTelemetryUpdates();
+  }
+
   /// Stop the analyzer subscription.
   void stop() {
     _isRunning = false;
@@ -94,79 +99,112 @@ class StressAnalyzerService {
     unawaited(_eventController.close());
     unawaited(_calmScoreController.close());
     unawaited(_phaseController.close());
+    unawaited(_baselineController.close());
   }
 
   // ── Core Processing ─────────────────────────────────────────
 
   void _onHeartRateReceived(int hr) {
-    final episode = _detector.processSample(hr);
+    final result = _detector.processSampleWithLifecycle(hr);
+    _emitTelemetryUpdates();
 
-    // Broadcast Calm Score changes
+    if (result.started != null) {
+      final started = result.started!;
+      _enqueueDbOp(() => _persistDetectedEpisode(started));
+    }
+
+    if (result.completed != null) {
+      final completed = result.completed!;
+      _enqueueDbOp(() => _finalizePersistedEpisode(completed));
+    }
+  }
+
+  void _emitTelemetryUpdates() {
     final newCalm = _detector.calmScore;
     if (newCalm != _lastEmittedCalmScore && !_calmScoreController.isClosed) {
       _lastEmittedCalmScore = newCalm;
       _calmScoreController.add(newCalm);
     }
 
-    // Broadcast phase transitions
     final newPhase = _detector.phase;
     if (newPhase != _lastEmittedPhase && !_phaseController.isClosed) {
       _lastEmittedPhase = newPhase;
       _phaseController.add(newPhase);
     }
 
-    if (episode != null && !_isTriggering) {
-      unawaited(_persistDetectedEpisode(episode));
+    final newBaseline = _detector.currentBaseline;
+    final baselineChanged = (newBaseline == null) != (_lastEmittedBaseline == null) ||
+        (newBaseline != null &&
+            _lastEmittedBaseline != null &&
+            (newBaseline - _lastEmittedBaseline!).abs() >= 0.5);
+    if (baselineChanged && !_baselineController.isClosed) {
+      _lastEmittedBaseline = newBaseline;
+      _baselineController.add(newBaseline);
     }
   }
 
+  void _enqueueDbOp(Future<void> Function() op) {
+    _dbOpQueue = _dbOpQueue.then((_) => op()).catchError((Object e) {
+      AppLogger.error(_tag, 'Queued DB operation failed', e);
+    });
+  }
+
   Future<void> _persistDetectedEpisode(DetectedStressEpisode episode) async {
-    if (_isTriggering) return;
-    _isTriggering = true;
+    String? meetingTitle;
+    List<String> attendees = [];
 
     try {
-      String? meetingTitle;
-      List<String> attendees = [];
-
-      try {
-        final meeting = await _calendarService.getCurrentMeeting();
-        if (meeting != null) {
-          meetingTitle = meeting.title;
-          attendees = meeting.attendees;
-        }
-      } catch (e) {
-        AppLogger.warn(_tag, 'Failed to read active meeting session', e);
+      final meeting = await _calendarService.getCurrentMeeting();
+      if (meeting != null) {
+        meetingTitle = meeting.title;
+        attendees = meeting.attendees;
       }
+    } catch (e) {
+      AppLogger.warn(_tag, 'Failed to read active meeting session', e);
+    }
 
-      final event = StressEvent(
-        timestamp: episode.timestamp,
-        peakHr: episode.peakHr,
-        meanHr: episode.meanHr,
-        baselineHr: episode.baselineHr,
-        meetingTitle: meetingTitle,
-        attendees: attendees,
-        durationSeconds: episode.durationSeconds,
-        stressLoad: episode.stressLoad,
-        label: attendees.isNotEmpty
-            ? StressEventLabel.confirmed
-            : StressEventLabel.unconfirmed,
-      );
+    final event = StressEvent(
+      timestamp: episode.timestamp,
+      peakHr: episode.peakHr,
+      meanHr: episode.meanHr,
+      baselineHr: episode.baselineHr,
+      meetingTitle: meetingTitle,
+      attendees: attendees,
+      durationSeconds: episode.durationSeconds,
+      stressLoad: episode.stressLoad,
+      label: attendees.isNotEmpty
+          ? StressEventLabel.confirmed
+          : StressEventLabel.unconfirmed,
+    );
 
-      int? insertedId;
-      try {
-        insertedId = await _databaseService.insertStressEvent(event);
-      } catch (e) {
-        AppLogger.error(_tag, 'Failed to insert stress event into SQLite', e);
-      }
-
-      final savedEvent =
-          insertedId != null ? event.copyWith(id: insertedId) : event;
-
+    try {
+      final insertedId = await _databaseService.insertStressEvent(event);
+      _activePersistedEventId = insertedId;
+      final savedEvent = event.copyWith(id: insertedId);
       if (!_eventController.isClosed) {
         _eventController.add(savedEvent);
       }
-    } finally {
-      _isTriggering = false;
+    } catch (e) {
+      _activePersistedEventId = null;
+      AppLogger.error(_tag, 'Failed to insert stress event into SQLite', e);
+    }
+  }
+
+  Future<void> _finalizePersistedEpisode(DetectedStressEpisode episode) async {
+    final eventId = _activePersistedEventId;
+    _activePersistedEventId = null;
+    if (eventId == null) return;
+
+    try {
+      await _databaseService.updateEpisodeMetrics(
+        eventId,
+        peakHr: episode.peakHr,
+        meanHr: episode.meanHr,
+        durationSeconds: episode.durationSeconds,
+        stressLoad: episode.stressLoad,
+      );
+    } catch (e) {
+      AppLogger.warn(_tag, 'Failed to update recovered episode metrics', e);
     }
   }
 }
