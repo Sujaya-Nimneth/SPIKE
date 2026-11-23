@@ -79,11 +79,11 @@ class StressEvent {
     );
   }
 
-  /// Serialize to a SQLite-compatible map.
+  /// Serialize to a SQLite-compatible map (timestamps stored in UTC ISO-8601).
   Map<String, dynamic> toMap() {
     return {
       if (id != null) 'id': id,
-      'timestamp': timestamp.toIso8601String(),
+      'timestamp': timestamp.toUtc().toIso8601String(),
       'peak_hr': peakHr,
       'mean_hr': meanHr,
       'baseline_hr': baselineHr,
@@ -95,7 +95,7 @@ class StressEvent {
     };
   }
 
-  /// Deserialize from a SQLite row (supports both v1 and v2 schemas).
+  /// Deserialize from a SQLite row (supports v1, v2, and v3 schemas).
   factory StressEvent.fromMap(Map<String, dynamic> map) {
     List<String> parseAttendees(dynamic raw) {
       if (raw == null || raw == '') return [];
@@ -117,9 +117,9 @@ class StressEvent {
 
     return StressEvent(
       id: map['id'] as int?,
-      timestamp: DateTime.parse(map['timestamp'] as String),
+      timestamp: DateTime.parse(map['timestamp'] as String).toLocal(),
       peakHr: peak,
-      meanHr: mean,
+      meanHr: mean > 0 ? mean : peak,
       baselineHr: map['baseline_hr'] as int,
       meetingTitle: map['meeting_title'] as String?,
       attendees: parseAttendees(map['attendees']),
