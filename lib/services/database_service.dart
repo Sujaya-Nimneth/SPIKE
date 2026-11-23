@@ -2,24 +2,44 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
-import '../models/stress_event.dart';
+import '../models/daily_activity.dart';
+import '../models/daily_hr_summary.dart';
+import '../models/device_sync_status.dart';
 import '../models/leaderboard_entry.dart';
+import '../models/sleep_session.dart';
+import '../models/stress_event.dart';
 
 /// SQLite database service for storing and querying stress events,
-/// coworker profiles, and normalized event-attendee relationships.
+/// coworker profiles, normalized event-attendee relationships, and
+/// persisted smart-ring telemetry (heart rate, activity, sleep, sync state).
 class DatabaseService {
+  DatabaseService({
+    DatabaseFactory? databaseFactory,
+    String? dbPathOverride,
+  })  : _databaseFactory = databaseFactory,
+        _dbPathOverride = dbPathOverride;
+
   static const _dbName = 'stress_events.db';
-  static const _dbVersion = 2;
+  static const _dbVersion = 3;
+
   static const _eventsTable = 'stress_events';
   static const _attendeesTable = 'event_attendees';
   static const _coworkersTable = 'coworkers';
+  static const _dailyHrTable = 'daily_hr_summaries';
+  static const _dailyActivityTable = 'daily_activity';
+  static const _sleepSessionsTable = 'sleep_sessions';
+  static const _syncStateTable = 'device_sync_state';
+
+  final DatabaseFactory? _databaseFactory;
+  final String? _dbPathOverride;
 
   Database? _database;
   Completer<Database>? _initCompleter;
 
   final _changesController = StreamController<void>.broadcast();
 
-  /// Broadcast stream that emits whenever stress events or coworker tags change.
+  /// Broadcast stream that emits whenever stress events, coworker tags, or
+  /// persisted ring telemetry change.
   Stream<void> get changes => _changesController.stream;
 
   void _notifyChanged() {
@@ -49,24 +69,40 @@ class DatabaseService {
   }
 
   Future<Database> _initDatabase() async {
-    final dbPath = await getDatabasesPath();
-    final path = join(dbPath, _dbName);
+    final path =
+        _dbPathOverride ?? join(await getDatabasesPath(), _dbName);
 
-    return openDatabase(
-      path,
+    final options = OpenDatabaseOptions(
       version: _dbVersion,
+      onConfigure: (db) async {
+        await db.execute('PRAGMA foreign_keys = ON');
+      },
       onCreate: (db, version) async {
-        await _createV2Schema(db);
+        await _createV3Schema(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           await _migrateV1ToV2(db);
         }
+        if (oldVersion < 3) {
+          await _migrateV2ToV3(db);
+        }
       },
+    );
+
+    if (_databaseFactory != null) {
+      return _databaseFactory.openDatabase(path, options: options);
+    }
+    return openDatabase(
+      path,
+      version: options.version,
+      onConfigure: options.onConfigure,
+      onCreate: options.onCreate,
+      onUpgrade: options.onUpgrade,
     );
   }
 
-  Future<void> _createV2Schema(Database db) async {
+  Future<void> _createV3Schema(Database db) async {
     await db.execute('''
       CREATE TABLE $_eventsTable (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,7 +120,7 @@ class DatabaseService {
 
     await db.execute('''
       CREATE TABLE $_coworkersTable (
-        name TEXT PRIMARY KEY,
+        name TEXT PRIMARY KEY COLLATE NOCASE,
         hidden INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL
       )
@@ -93,8 +129,11 @@ class DatabaseService {
     await db.execute('''
       CREATE TABLE $_attendeesTable (
         event_id INTEGER NOT NULL,
-        coworker_name TEXT NOT NULL,
-        PRIMARY KEY (event_id, coworker_name)
+        coworker_name TEXT NOT NULL COLLATE NOCASE,
+        PRIMARY KEY (event_id, coworker_name),
+        FOREIGN KEY (event_id) REFERENCES $_eventsTable(id) ON DELETE CASCADE,
+        FOREIGN KEY (coworker_name) REFERENCES $_coworkersTable(name)
+          ON UPDATE CASCADE ON DELETE CASCADE
       )
     ''');
 
@@ -104,10 +143,73 @@ class DatabaseService {
     await db.execute(
       'CREATE INDEX idx_event_attendees_name ON $_attendeesTable(coworker_name)',
     );
+
+    await _createTelemetryTables(db);
+  }
+
+  Future<void> _createTelemetryTables(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS $_dailyHrTable (
+        date TEXT PRIMARY KEY,
+        last_hr INTEGER NOT NULL,
+        min_hr INTEGER NOT NULL,
+        max_hr INTEGER NOT NULL,
+        hr_sum INTEGER NOT NULL,
+        sample_count INTEGER NOT NULL,
+        resting_hr INTEGER,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS $_dailyActivityTable (
+        date TEXT PRIMARY KEY,
+        steps INTEGER NOT NULL,
+        calories INTEGER NOT NULL,
+        distance_meters INTEGER NOT NULL,
+        active_minutes INTEGER NOT NULL,
+        step_goal INTEGER NOT NULL DEFAULT 8000,
+        synced_at TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS $_sleepSessionsTable (
+        date TEXT PRIMARY KEY,
+        bedtime TEXT,
+        wake_time TEXT,
+        total_sleep_minutes INTEGER NOT NULL,
+        time_in_bed_minutes INTEGER NOT NULL,
+        awake_minutes INTEGER NOT NULL,
+        light_minutes INTEGER NOT NULL,
+        deep_minutes INTEGER NOT NULL,
+        rem_minutes INTEGER NOT NULL,
+        efficiency_percent INTEGER NOT NULL,
+        sleep_score INTEGER NOT NULL,
+        resting_hr INTEGER,
+        synced_at TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS $_syncStateTable (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_daily_hr_date ON $_dailyHrTable(date DESC)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_daily_activity_date ON $_dailyActivityTable(date DESC)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_sleep_sessions_date ON $_sleepSessionsTable(date DESC)',
+    );
   }
 
   Future<void> _migrateV1ToV2(Database db) async {
-    // Add v2 columns to existing stress_events table
     try {
       await db.execute(
         'ALTER TABLE $_eventsTable ADD COLUMN mean_hr INTEGER NOT NULL DEFAULT 0',
@@ -147,9 +249,8 @@ class DatabaseService {
       'CREATE INDEX IF NOT EXISTS idx_event_attendees_name ON $_attendeesTable(coworker_name)',
     );
 
-    // Backfill normalized attendees table from legacy JSON column
     final rows = await db.query(_eventsTable);
-    final nowIso = DateTime.now().toIso8601String();
+    final nowIso = DateTime.now().toUtc().toIso8601String();
     for (final row in rows) {
       final eventId = row['id'] as int?;
       final rawJson = row['attendees'] as String?;
@@ -176,22 +277,156 @@ class DatabaseService {
     }
   }
 
-  // ── Insert & Update ─────────────────────────────────────────
+  Future<void> _migrateV2ToV3(Database db) async {
+    // 1. Backfill missing mean_hr on legacy rows
+    await db.execute(
+      'UPDATE $_eventsTable SET mean_hr = peak_hr WHERE mean_hr = 0',
+    );
+
+    // 2. Deduplicate coworkers case-insensitively and enforce COLLATE NOCASE + FKs
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+    final canonicalByKey = <String, ({String name, int hidden, String createdAt})>{};
+
+    final existingCoworkers = await db.query(_coworkersTable);
+    for (final row in existingCoworkers) {
+      final rawName = (row['name'] as String?)?.trim() ?? '';
+      if (rawName.isEmpty) continue;
+      final key = rawName.toLowerCase();
+      final hidden = (row['hidden'] as int?) ?? 0;
+      final createdAt = (row['created_at'] as String?) ?? nowIso;
+
+      final existing = canonicalByKey[key];
+      if (existing == null) {
+        canonicalByKey[key] = (
+          name: rawName,
+          hidden: hidden,
+          createdAt: createdAt,
+        );
+      } else {
+        // Keep visible if any variant was visible
+        canonicalByKey[key] = (
+          name: existing.name,
+          hidden: (existing.hidden == 0 || hidden == 0) ? 0 : 1,
+          createdAt: existing.createdAt,
+        );
+      }
+    }
+
+    final existingLinks = await db.query(_attendeesTable);
+    for (final row in existingLinks) {
+      final rawName = (row['coworker_name'] as String?)?.trim() ?? '';
+      if (rawName.isEmpty) continue;
+      final key = rawName.toLowerCase();
+      canonicalByKey.putIfAbsent(
+        key,
+        () => (name: rawName, hidden: 0, createdAt: nowIso),
+      );
+    }
+
+    await db.execute('DROP TABLE IF EXISTS ${_coworkersTable}_v3');
+    await db.execute('''
+      CREATE TABLE ${_coworkersTable}_v3 (
+        name TEXT PRIMARY KEY COLLATE NOCASE,
+        hidden INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+      )
+    ''');
+    for (final entry in canonicalByKey.values) {
+      await db.insert(
+        '${_coworkersTable}_v3',
+        {
+          'name': entry.name,
+          'hidden': entry.hidden,
+          'created_at': entry.createdAt,
+        },
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+    }
+
+    // Collect valid event IDs to avoid orphan links violating FK
+    final eventRows = await db.query(_eventsTable, columns: ['id']);
+    final validEventIds = eventRows.map((r) => r['id'] as int).toSet();
+
+    await db.execute('DROP TABLE IF EXISTS ${_attendeesTable}_v3');
+    await db.execute('DROP TABLE $_coworkersTable');
+    await db.execute('ALTER TABLE ${_coworkersTable}_v3 RENAME TO $_coworkersTable');
+
+    await db.execute('''
+      CREATE TABLE ${_attendeesTable}_v3 (
+        event_id INTEGER NOT NULL,
+        coworker_name TEXT NOT NULL COLLATE NOCASE,
+        PRIMARY KEY (event_id, coworker_name),
+        FOREIGN KEY (event_id) REFERENCES $_eventsTable(id) ON DELETE CASCADE,
+        FOREIGN KEY (coworker_name) REFERENCES $_coworkersTable(name)
+          ON UPDATE CASCADE ON DELETE CASCADE
+      )
+    ''');
+
+    for (final row in existingLinks) {
+      final eventId = row['event_id'] as int?;
+      final rawName = (row['coworker_name'] as String?)?.trim() ?? '';
+      if (eventId == null || !validEventIds.contains(eventId) || rawName.isEmpty) {
+        continue;
+      }
+      final canonical = canonicalByKey[rawName.toLowerCase()]?.name ?? rawName;
+      await db.insert(
+        '${_attendeesTable}_v3',
+        {'event_id': eventId, 'coworker_name': canonical},
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+    }
+
+    await db.execute('DROP TABLE $_attendeesTable');
+    await db.execute('ALTER TABLE ${_attendeesTable}_v3 RENAME TO $_attendeesTable');
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_event_attendees_name ON $_attendeesTable(coworker_name)',
+    );
+
+    // 3. Create new v3 telemetry tables
+    await _createTelemetryTables(db);
+  }
+
+  // ── Stress Event Insert & Update ────────────────────────────
 
   /// Insert a new stress event and normalize its attendees.
   Future<int> insertStressEvent(StressEvent event) async {
     final db = await database;
     final cleanAttendees = _normalizeNames(event.attendees);
-    final normalizedEvent = event.copyWith(attendees: cleanAttendees);
 
     final eventId = await db.transaction<int>((txn) async {
+      final canonicalAttendees =
+          await _resolveCanonicalNamesTxn(txn, cleanAttendees);
+      final normalizedEvent = event.copyWith(attendees: canonicalAttendees);
       final id = await txn.insert(_eventsTable, normalizedEvent.toMap());
-      await _syncEventAttendeesTxn(txn, id, cleanAttendees);
+      await _syncEventAttendeesTxn(txn, id, canonicalAttendees);
       return id;
     });
 
     _notifyChanged();
     return eventId;
+  }
+
+  /// Update finalized episode metrics once a confirmed stress spike recovers.
+  Future<void> updateEpisodeMetrics(
+    int eventId, {
+    required int peakHr,
+    required int meanHr,
+    required int durationSeconds,
+    required double stressLoad,
+  }) async {
+    final db = await database;
+    await db.update(
+      _eventsTable,
+      {
+        'peak_hr': peakHr,
+        'mean_hr': meanHr,
+        'duration_seconds': durationSeconds,
+        'stress_load': stressLoad,
+      },
+      where: 'id = ?',
+      whereArgs: [eventId],
+    );
+    _notifyChanged();
   }
 
   /// Update the tagged coworkers and optional meeting title for an event.
@@ -204,8 +439,10 @@ class DatabaseService {
     final cleanAttendees = _normalizeNames(attendees);
 
     await db.transaction((txn) async {
+      final canonicalAttendees =
+          await _resolveCanonicalNamesTxn(txn, cleanAttendees);
       final updates = <String, dynamic>{
-        'attendees': jsonEncode(cleanAttendees),
+        'attendees': jsonEncode(canonicalAttendees),
         'user_label': StressEventLabel.confirmed.value,
       };
       if (meetingTitle != null) {
@@ -219,7 +456,7 @@ class DatabaseService {
         where: 'id = ?',
         whereArgs: [eventId],
       );
-      await _syncEventAttendeesTxn(txn, eventId, cleanAttendees);
+      await _syncEventAttendeesTxn(txn, eventId, canonicalAttendees);
     });
 
     _notifyChanged();
@@ -237,22 +474,37 @@ class DatabaseService {
     _notifyChanged();
   }
 
-  /// Delete a single stress event by ID.
+  /// Delete a single stress event by ID (cascades to `event_attendees`).
   Future<void> deleteStressEvent(int eventId) async {
     final db = await database;
-    await db.transaction((txn) async {
-      await txn.delete(
-        _attendeesTable,
-        where: 'event_id = ?',
-        whereArgs: [eventId],
-      );
-      await txn.delete(
-        _eventsTable,
-        where: 'id = ?',
-        whereArgs: [eventId],
-      );
-    });
+    await db.delete(
+      _eventsTable,
+      where: 'id = ?',
+      whereArgs: [eventId],
+    );
     _notifyChanged();
+  }
+
+  Future<List<String>> _resolveCanonicalNamesTxn(
+    Transaction txn,
+    List<String> names,
+  ) async {
+    final resolved = <String>[];
+    for (final name in names) {
+      final existing = await txn.query(
+        _coworkersTable,
+        columns: ['name'],
+        where: 'name = ? COLLATE NOCASE',
+        whereArgs: [name],
+        limit: 1,
+      );
+      if (existing.isNotEmpty) {
+        resolved.add(existing.first['name'] as String);
+      } else {
+        resolved.add(name);
+      }
+    }
+    return resolved;
   }
 
   Future<void> _syncEventAttendeesTxn(
@@ -266,7 +518,7 @@ class DatabaseService {
       whereArgs: [eventId],
     );
 
-    final nowIso = DateTime.now().toIso8601String();
+    final nowIso = DateTime.now().toUtc().toIso8601String();
     for (final name in attendees) {
       await txn.insert(
         _coworkersTable,
@@ -297,19 +549,39 @@ class DatabaseService {
 
   // ── Coworker Directory ──────────────────────────────────────
 
-  /// Add a coworker to the directory for quick tagging.
+  /// Add a coworker to the directory for quick tagging (case-insensitive).
   Future<void> addCoworker(String name) async {
     final trimmed = name.trim();
     if (trimmed.isEmpty) return;
     final db = await database;
+    final existing = await db.query(
+      _coworkersTable,
+      where: 'name = ? COLLATE NOCASE',
+      whereArgs: [trimmed],
+      limit: 1,
+    );
+    if (existing.isNotEmpty) {
+      // Ensure un-hidden if re-added explicitly
+      if ((existing.first['hidden'] as int?) == 1) {
+        await db.update(
+          _coworkersTable,
+          {'hidden': 0},
+          where: 'name = ? COLLATE NOCASE',
+          whereArgs: [trimmed],
+        );
+        _notifyChanged();
+      }
+      return;
+    }
+
     await db.insert(
       _coworkersTable,
       {
         'name': trimmed,
         'hidden': 0,
-        'created_at': DateTime.now().toIso8601String(),
+        'created_at': DateTime.now().toUtc().toIso8601String(),
       },
-      conflictAlgorithm: ConflictAlgorithm.replace,
+      conflictAlgorithm: ConflictAlgorithm.ignore,
     );
     _notifyChanged();
   }
@@ -322,19 +594,55 @@ class DatabaseService {
 
     final db = await database;
     await db.transaction((txn) async {
-      await txn.insert(
+      // Case-only rename (e.g. "alice" -> "Alice")
+      if (cleanOld.toLowerCase() == cleanNew.toLowerCase()) {
+        final affectedRows = await txn.query(
+          _attendeesTable,
+          columns: ['event_id'],
+          where: 'coworker_name = ? COLLATE NOCASE',
+          whereArgs: [cleanOld],
+        );
+        await txn.update(
+          _coworkersTable,
+          {'name': cleanNew},
+          where: 'name = ? COLLATE NOCASE',
+          whereArgs: [cleanOld],
+        );
+        await _refreshEventAttendeesJsonTxn(
+          txn,
+          affectedRows.map((r) => r['event_id'] as int),
+        );
+        return;
+      }
+
+      // Merging into an existing or new coworker
+      final existingTarget = await txn.query(
         _coworkersTable,
-        {
-          'name': cleanNew,
-          'hidden': 0,
-          'created_at': DateTime.now().toIso8601String(),
-        },
-        conflictAlgorithm: ConflictAlgorithm.ignore,
+        columns: ['name'],
+        where: 'name = ? COLLATE NOCASE',
+        whereArgs: [cleanNew],
+        limit: 1,
       );
+      final targetName = existingTarget.isNotEmpty
+          ? existingTarget.first['name'] as String
+          : cleanNew;
+
+      if (existingTarget.isEmpty) {
+        await txn.insert(
+          _coworkersTable,
+          {
+            'name': targetName,
+            'hidden': 0,
+            'created_at': DateTime.now().toUtc().toIso8601String(),
+          },
+          conflictAlgorithm: ConflictAlgorithm.ignore,
+        );
+      }
 
       final affectedRows = await txn.query(
         _attendeesTable,
-        where: 'coworker_name = ?',
+        columns: ['event_id'],
+        where: 'coworker_name = ? COLLATE NOCASE',
         whereArgs: [cleanOld],
       );
 
@@ -342,52 +650,59 @@ class DatabaseService {
         final eventId = row['event_id'] as int;
         await txn.insert(
           _attendeesTable,
-          {'event_id': eventId, 'coworker_name': cleanNew},
+          {'event_id': eventId, 'coworker_name': targetName},
           conflictAlgorithm: ConflictAlgorithm.ignore,
         );
       }
 
       await txn.delete(
         _attendeesTable,
-        where: 'coworker_name = ?',
+        where: 'coworker_name = ? COLLATE NOCASE',
         whereArgs: [cleanOld],
       );
       await txn.delete(
         _coworkersTable,
-        where: 'name = ?',
+        where: 'name = ? COLLATE NOCASE',
         whereArgs: [cleanOld],
       );
 
-      // Update JSON column on affected events for consistency
-      for (final row in affectedRows) {
-        final eventId = row['event_id'] as int;
-        final currentAttendees = await txn.query(
-          _attendeesTable,
-          where: 'event_id = ?',
-          whereArgs: [eventId],
-        );
-        final names = currentAttendees
-            .map((r) => r['coworker_name'] as String)
-            .toList();
-        await txn.update(
-          _eventsTable,
-          {'attendees': jsonEncode(names)},
-          where: 'id = ?',
-          whereArgs: [eventId],
-        );
-      }
+      await _refreshEventAttendeesJsonTxn(
+        txn,
+        affectedRows.map((r) => r['event_id'] as int),
+      );
     });
 
     _notifyChanged();
   }
 
-  /// Hide a coworker from the leaderboard without deleting historical events.
+  Future<void> _refreshEventAttendeesJsonTxn(
+    Transaction txn,
+    Iterable<int> eventIds,
+  ) async {
+    for (final eventId in eventIds.toSet()) {
+      final currentAttendees = await txn.query(
+        _attendeesTable,
+        where: 'event_id = ?',
+        whereArgs: [eventId],
+      );
+      final names =
+          currentAttendees.map((r) => r['coworker_name'] as String).toList();
+      await txn.update(
+        _eventsTable,
+        {'attendees': jsonEncode(names)},
+        where: 'id = ?',
+        whereArgs: [eventId],
+      );
+    }
+  }
+
+  /// Hide or unhide a coworker from the leaderboard without deleting events.
   Future<void> setCoworkerHidden(String name, {required bool hidden}) async {
     final db = await database;
     await db.update(
       _coworkersTable,
       {'hidden': hidden ? 1 : 0},
-      where: 'name = ?',
+      where: 'name = ? COLLATE NOCASE',
       whereArgs: [name.trim()],
     );
     _notifyChanged();
@@ -404,7 +719,23 @@ class DatabaseService {
     return rows.map((r) => r['name'] as String).toList();
   }
 
-  // ── Queries ─────────────────────────────────────────────────
+  /// Returns all currently hidden coworker names.
+  Future<List<String>> getHiddenCoworkerNames() async {
+    final db = await database;
+    final rows = await db.query(
+      _coworkersTable,
+      where: 'hidden = 1',
+      orderBy: 'name COLLATE NOCASE ASC',
+    );
+    return rows.map((r) => r['name'] as String).toList();
+  }
+
+  // ── Stress Queries ──────────────────────────────────────────
+
+  String? _periodCutoffUtc(LeaderboardPeriod period) {
+    if (period.window == null) return null;
+    return DateTime.now().toUtc().subtract(period.window!).toIso8601String();
+  }
 
   /// Fetch all non-dismissed stress events, most recent first.
   Future<List<StressEvent>> getAllStressEvents({
@@ -434,18 +765,33 @@ class DatabaseService {
     return rows.map((row) => StressEvent.fromMap(row)).toList();
   }
 
-  /// Fetch all stress events associated with a specific coworker.
-  Future<List<StressEvent>> getEventsForCoworker(String name) async {
+  /// Fetch stress events associated with a specific coworker (filtered by [period]).
+  Future<List<StressEvent>> getEventsForCoworker(
+    String name, {
+    LeaderboardPeriod period = LeaderboardPeriod.allTime,
+  }) async {
     final db = await database;
+    final cutoff = _periodCutoffUtc(period);
     final rows = await db.rawQuery(
-      '''
-      SELECT e.*
-      FROM $_eventsTable e
-      INNER JOIN $_attendeesTable a ON e.id = a.event_id
-      WHERE a.coworker_name = ? AND e.user_label != 'dismissed'
-      ORDER BY e.timestamp DESC
-      ''',
-      [name],
+      cutoff != null
+          ? '''
+            SELECT e.*
+            FROM $_eventsTable e
+            INNER JOIN $_attendeesTable a ON e.id = a.event_id
+            WHERE a.coworker_name = ? COLLATE NOCASE
+              AND e.user_label != 'dismissed'
+              AND e.timestamp >= ?
+            ORDER BY e.timestamp DESC
+            '''
+          : '''
+            SELECT e.*
+            FROM $_eventsTable e
+            INNER JOIN $_attendeesTable a ON e.id = a.event_id
+            WHERE a.coworker_name = ? COLLATE NOCASE
+              AND e.user_label != 'dismissed'
+            ORDER BY e.timestamp DESC
+            ''',
+      cutoff != null ? [name, cutoff] : [name],
     );
     return rows.map((row) => StressEvent.fromMap(row)).toList();
   }
@@ -467,9 +813,7 @@ class DatabaseService {
     LeaderboardPeriod period = LeaderboardPeriod.allTime,
   }) async {
     final db = await database;
-    final cutoff = period.window != null
-        ? DateTime.now().subtract(period.window!).toIso8601String()
-        : null;
+    final cutoff = _periodCutoffUtc(period);
 
     final result = cutoff != null
         ? await db.rawQuery(
@@ -482,17 +826,25 @@ class DatabaseService {
     return Sqflite.firstIntValue(result) ?? 0;
   }
 
-  // ── Leaderboard Aggregation (SQL-backed) ────────────────────
+  /// Count active stress events recorded since local midnight today.
+  Future<int> getTodayStressEventCount({DateTime? now}) async {
+    final db = await database;
+    final ref = now ?? DateTime.now();
+    final startOfDayUtc =
+        DateTime(ref.year, ref.month, ref.day).toUtc().toIso8601String();
+    final result = await db.rawQuery(
+      "SELECT COUNT(*) as count FROM $_eventsTable WHERE user_label != 'dismissed' AND timestamp >= ?",
+      [startOfDayUtc],
+    );
+    return Sqflite.firstIntValue(result) ?? 0;
+  }
 
-  /// Aggregate stress events by coworker using normalized SQL tables,
-  /// ranked by raw spike count descending, then average peak HR descending.
+  /// Aggregate stress events by coworker using normalized SQL tables.
   Future<List<LeaderboardEntry>> getLeaderboard({
     LeaderboardPeriod period = LeaderboardPeriod.allTime,
   }) async {
     final db = await database;
-    final cutoff = period.window != null
-        ? DateTime.now().subtract(period.window!).toIso8601String()
-        : null;
+    final cutoff = _periodCutoffUtc(period);
 
     final whereClause = cutoff != null
         ? "WHERE e.user_label != 'dismissed' AND COALESCE(c.hidden, 0) = 0 AND e.timestamp >= ?"
@@ -501,7 +853,7 @@ class DatabaseService {
     final rows = await db.rawQuery(
       '''
       SELECT
-        a.coworker_name AS name,
+        COALESCE(c.name, a.coworker_name) AS name,
         COUNT(DISTINCT e.id) AS spike_count,
         AVG(e.peak_hr) AS avg_peak_hr,
         MAX(e.peak_hr) AS max_peak_hr,
@@ -510,9 +862,9 @@ class DatabaseService {
         MAX(e.timestamp) AS last_seen
       FROM $_attendeesTable a
       INNER JOIN $_eventsTable e ON e.id = a.event_id
-      LEFT JOIN $_coworkersTable c ON c.name = a.coworker_name
+      LEFT JOIN $_coworkersTable c ON c.name = a.coworker_name COLLATE NOCASE
       $whereClause
-      GROUP BY a.coworker_name
+      GROUP BY COALESCE(c.name, a.coworker_name) COLLATE NOCASE
       ORDER BY spike_count DESC, avg_peak_hr DESC
       ''',
       cutoff != null ? [cutoff] : null,
@@ -521,7 +873,266 @@ class DatabaseService {
     return rows.map((row) => LeaderboardEntry.fromMap(row)).toList();
   }
 
-  // ── Delete ──────────────────────────────────────────────────
+  // ── Persisted Heart Rate Summaries ──────────────────────────
+
+  /// Atomically record a real BLE heart rate sample into today's summary.
+  Future<void> recordHeartRateSample(
+    int bpm, {
+    DateTime? timestamp,
+    int? restingHr,
+    bool notify = true,
+  }) async {
+    final db = await database;
+    final ts = (timestamp ?? DateTime.now()).toLocal();
+    final dateKey = _formatDateKey(ts);
+    final updatedIso = ts.toUtc().toIso8601String();
+
+    await db.rawInsert(
+      '''
+      INSERT INTO $_dailyHrTable
+        (date, last_hr, min_hr, max_hr, hr_sum, sample_count, resting_hr, updated_at)
+      VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+      ON CONFLICT(date) DO UPDATE SET
+        last_hr = excluded.last_hr,
+        min_hr = MIN($_dailyHrTable.min_hr, excluded.min_hr),
+        max_hr = MAX($_dailyHrTable.max_hr, excluded.max_hr),
+        hr_sum = $_dailyHrTable.hr_sum + excluded.hr_sum,
+        sample_count = $_dailyHrTable.sample_count + 1,
+        resting_hr = COALESCE(excluded.resting_hr, $_dailyHrTable.resting_hr),
+        updated_at = excluded.updated_at
+      ''',
+      [dateKey, bpm, bpm, bpm, bpm, restingHr, updatedIso],
+    );
+    if (notify) {
+      _notifyChanged();
+    }
+  }
+
+  Future<DailyHrSummary?> getTodayHrSummary({DateTime? now}) async {
+    final db = await database;
+    final dateKey = _formatDateKey((now ?? DateTime.now()).toLocal());
+    final rows = await db.query(
+      _dailyHrTable,
+      where: 'date = ?',
+      whereArgs: [dateKey],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return DailyHrSummary.fromMap(rows.first);
+  }
+
+  Future<DailyHrSummary?> getLatestHrSummary() async {
+    final db = await database;
+    final rows = await db.query(
+      _dailyHrTable,
+      orderBy: 'date DESC',
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return DailyHrSummary.fromMap(rows.first);
+  }
+
+  Future<List<DailyHrSummary>> getRecentHrSummaries({int days = 7}) async {
+    final db = await database;
+    final rows = await db.query(
+      _dailyHrTable,
+      orderBy: 'date DESC',
+      limit: days,
+    );
+    return rows.map(DailyHrSummary.fromMap).toList();
+  }
+
+  /// Returns the average daily HR and average resting HR over the last [days] days.
+  Future<({double? avgDailyHr, double? avgRestingHr, int daysCount})>
+      getDailyHrAverages({int days = 7}) async {
+    final recent = await getRecentHrSummaries(days: days);
+    if (recent.isEmpty) {
+      return (avgDailyHr: null, avgRestingHr: null, daysCount: 0);
+    }
+    final avgDaily =
+        recent.map((r) => r.avgHr).reduce((a, b) => a + b) / recent.length;
+    final restingValues =
+        recent.where((r) => r.restingHr != null).map((r) => r.restingHr!);
+    final avgResting = restingValues.isEmpty
+        ? null
+        : restingValues.reduce((a, b) => a + b) / restingValues.length;
+    return (
+      avgDailyHr: avgDaily,
+      avgRestingHr: avgResting,
+      daysCount: recent.length,
+    );
+  }
+
+  // ── Persisted Daily Activity ────────────────────────────────
+
+  Future<void> upsertDailyActivity(DailyActivityRecord record) async {
+    final db = await database;
+    await db.insert(
+      _dailyActivityTable,
+      record.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    await _setSyncStateRaw(
+      db,
+      'last_activity_sync_at',
+      record.syncedAt.toUtc().toIso8601String(),
+    );
+    _notifyChanged();
+  }
+
+  Future<DailyActivityRecord?> getTodayActivity({DateTime? now}) async {
+    final db = await database;
+    final dateKey = _formatDateKey((now ?? DateTime.now()).toLocal());
+    final rows = await db.query(
+      _dailyActivityTable,
+      where: 'date = ?',
+      whereArgs: [dateKey],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return DailyActivityRecord.fromMap(rows.first);
+  }
+
+  Future<DailyActivityRecord?> getLatestActivity() async {
+    final db = await database;
+    final rows = await db.query(
+      _dailyActivityTable,
+      orderBy: 'date DESC',
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return DailyActivityRecord.fromMap(rows.first);
+  }
+
+  Future<List<DailyActivityRecord>> getRecentActivity({int days = 7}) async {
+    final db = await database;
+    final rows = await db.query(
+      _dailyActivityTable,
+      orderBy: 'date DESC',
+      limit: days,
+    );
+    return rows.map(DailyActivityRecord.fromMap).toList();
+  }
+
+  Future<ActivityAverages> getActivityAverages({int days = 7}) async {
+    final recent = await getRecentActivity(days: days);
+    if (recent.isEmpty) return ActivityAverages.empty;
+    final n = recent.length;
+    return ActivityAverages(
+      avgSteps: recent.fold<int>(0, (s, r) => s + r.steps) / n,
+      avgCalories: recent.fold<int>(0, (s, r) => s + r.calories) / n,
+      avgDistanceMeters:
+          recent.fold<int>(0, (s, r) => s + r.distanceMeters) / n,
+      avgActiveMinutes:
+          recent.fold<int>(0, (s, r) => s + r.activeMinutes) / n,
+      daysCount: n,
+    );
+  }
+
+  // ── Persisted Sleep Sessions ────────────────────────────────
+
+  Future<void> upsertSleepSession(SleepSessionRecord record) async {
+    final db = await database;
+    await db.insert(
+      _sleepSessionsTable,
+      record.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    await _setSyncStateRaw(
+      db,
+      'last_sleep_sync_at',
+      record.syncedAt.toUtc().toIso8601String(),
+    );
+    _notifyChanged();
+  }
+
+  Future<SleepSessionRecord?> getLatestSleepSession() async {
+    final db = await database;
+    final rows = await db.query(
+      _sleepSessionsTable,
+      orderBy: 'date DESC',
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return SleepSessionRecord.fromMap(rows.first);
+  }
+
+  Future<List<SleepSessionRecord>> getRecentSleepSessions({
+    int days = 7,
+  }) async {
+    final db = await database;
+    final rows = await db.query(
+      _sleepSessionsTable,
+      orderBy: 'date DESC',
+      limit: days,
+    );
+    return rows.map(SleepSessionRecord.fromMap).toList();
+  }
+
+  Future<SleepAverages> getSleepAverages({int days = 7}) async {
+    final recent = await getRecentSleepSessions(days: days);
+    if (recent.isEmpty) return SleepAverages.empty;
+    final n = recent.length;
+    return SleepAverages(
+      avgTotalSleepMinutes:
+          recent.fold<int>(0, (s, r) => s + r.totalSleepMinutes) / n,
+      avgEfficiencyPercent:
+          recent.fold<int>(0, (s, r) => s + r.efficiencyPercent) / n,
+      avgSleepScore: recent.fold<int>(0, (s, r) => s + r.sleepScore) / n,
+      avgDeepMinutes: recent.fold<int>(0, (s, r) => s + r.deepMinutes) / n,
+      avgRemMinutes: recent.fold<int>(0, (s, r) => s + r.remMinutes) / n,
+      nightsCount: n,
+    );
+  }
+
+  // ── Device Sync Metadata ────────────────────────────────────
+
+  Future<void> _setSyncStateRaw(Database db, String key, String value) async {
+    await db.insert(
+      _syncStateTable,
+      {'key': key, 'value': value},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<void> updateSyncState(
+    String key,
+    String value, {
+    bool notify = true,
+  }) async {
+    final db = await database;
+    await _setSyncStateRaw(db, key, value);
+    if (notify) {
+      _notifyChanged();
+    }
+  }
+
+  Future<DeviceSyncStatus> getDeviceSyncStatus() async {
+    final db = await database;
+    final rows = await db.query(_syncStateTable);
+    final map = <String, String>{
+      for (final row in rows)
+        row['key'] as String: row['value'] as String,
+    };
+
+    DateTime? parseOptDate(String? raw) =>
+        raw != null ? DateTime.tryParse(raw)?.toLocal() : null;
+
+    return DeviceSyncStatus(
+      lastConnectedAt: parseOptDate(map['last_connected_at']),
+      lastDeviceName: map['last_device_name'],
+      lastBatteryPercent: map['last_battery_percent'] != null
+          ? int.tryParse(map['last_battery_percent']!)
+          : null,
+      lastBatteryCharging: map['last_battery_charging'] != null
+          ? map['last_battery_charging'] == '1'
+          : null,
+      lastActivitySyncAt: parseOptDate(map['last_activity_sync_at']),
+      lastSleepSyncAt: parseOptDate(map['last_sleep_sync_at']),
+    );
+  }
+
+  // ── Delete & Close ──────────────────────────────────────────
 
   /// Delete all stress events and coworker records.
   Future<int> clearAll() async {
@@ -541,5 +1152,12 @@ class DatabaseService {
     await _database?.close();
     _database = null;
     _initCompleter = null;
+  }
+
+  static String _formatDateKey(DateTime dt) {
+    final y = dt.year.toString().padLeft(4, '0');
+    final m = dt.month.toString().padLeft(2, '0');
+    final d = dt.day.toString().padLeft(2, '0');
+    return '$y-$m-$d';
   }
 }

@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../models/stress_event.dart';
 import '../models/leaderboard_entry.dart';
+import '../models/stress_event.dart';
 import '../services/calendar_service.dart';
 import '../services/database_service.dart';
 import '../services/stress/stress_detector.dart';
@@ -18,24 +18,40 @@ final calendarServiceProvider = Provider<CalendarService>((ref) {
 });
 
 /// StateNotifier managing the currently active manual meeting session.
+///
+/// Subscribes to [CalendarService.activeMeetingStream] so automatic meeting
+/// expiry stays synchronized with the UI.
 class ActiveMeetingNotifier extends StateNotifier<CurrentMeeting?> {
   final CalendarService _service;
+  StreamSubscription<CurrentMeeting?>? _sub;
 
-  ActiveMeetingNotifier(this._service) : super(_service.activeMeeting);
+  ActiveMeetingNotifier(this._service) : super(_service.activeMeeting) {
+    _sub = _service.activeMeetingStream.listen((meeting) {
+      state = meeting;
+    });
+  }
 
   void startSession({
     required List<String> attendees,
     String? title,
+    Duration maxDuration = const Duration(hours: 2),
   }) {
     state = _service.startMeetingSession(
       attendees: attendees,
       title: title,
+      maxDuration: maxDuration,
     );
   }
 
   void endSession() {
     _service.endMeetingSession();
     state = null;
+  }
+
+  @override
+  void dispose() {
+    unawaited(_sub?.cancel());
+    super.dispose();
   }
 }
 
@@ -55,7 +71,7 @@ final databaseServiceProvider = Provider<DatabaseService>((ref) {
   return service;
 });
 
-/// Emits whenever any stress event or coworker tag is modified in SQLite.
+/// Emits whenever any stress event, coworker tag, or synced telemetry changes.
 final databaseChangesProvider = StreamProvider<void>((ref) {
   final db = ref.watch(databaseServiceProvider);
   return db.changes;
@@ -95,9 +111,16 @@ final stressPhaseProvider = StreamProvider<StressDetectionPhase>((ref) async* {
   yield* analyzer.phaseStream;
 });
 
+/// Streams the rolling median HR baseline (`null` while calibrating).
+final baselineHrProvider = StreamProvider<double?>((ref) async* {
+  final analyzer = ref.watch(stressAnalyzerProvider);
+  yield analyzer.currentBaseline;
+  yield* analyzer.baselineStream;
+});
+
 // ── Active Stress Event Stream ──────────────────────────────────
 
-/// Streams stress events as they are detected in real time.
+/// Streams stress events as they are detected and persisted in real time.
 final activeStressEventProvider = StreamProvider<StressEvent>((ref) {
   final analyzer = ref.watch(stressAnalyzerProvider);
   return analyzer.stressEventStream;
@@ -119,9 +142,7 @@ final leaderboardPrivacyModeProvider = StateProvider<bool>((ref) {
 
 /// Fetches all stored stress events from the database.
 final stressEventsProvider = FutureProvider<List<StressEvent>>((ref) async {
-  ref.watch(activeStressEventProvider);
   ref.watch(databaseChangesProvider);
-
   final db = ref.watch(databaseServiceProvider);
   return db.getAllStressEvents();
 });
@@ -129,48 +150,55 @@ final stressEventsProvider = FutureProvider<List<StressEvent>>((ref) async {
 /// Fetches stress events that have not yet been tagged with any coworkers.
 final untaggedStressEventsProvider =
     FutureProvider<List<StressEvent>>((ref) async {
-  ref.watch(activeStressEventProvider);
   ref.watch(databaseChangesProvider);
-
   final db = ref.watch(databaseServiceProvider);
   return db.getUntaggedStressEvents();
 });
 
-/// Fetches all saved coworker names for quick-select tagging chips.
+/// Fetches all saved non-hidden coworker names for quick-select tagging chips.
 final coworkerNamesProvider = FutureProvider<List<String>>((ref) async {
   ref.watch(databaseChangesProvider);
-
   final db = ref.watch(databaseServiceProvider);
   return db.getAllCoworkerNames();
 });
 
-/// Fetches the coworker stress leaderboard for the selected [LeaderboardPeriod],
-/// ranked by raw spike count descending.
+/// Fetches all hidden coworker names for unhide controls in Settings.
+final hiddenCoworkersProvider = FutureProvider<List<String>>((ref) async {
+  ref.watch(databaseChangesProvider);
+  final db = ref.watch(databaseServiceProvider);
+  return db.getHiddenCoworkerNames();
+});
+
+/// Fetches the coworker stress leaderboard for the selected [LeaderboardPeriod].
 final leaderboardProvider =
     FutureProvider<List<LeaderboardEntry>>((ref) async {
-  ref.watch(activeStressEventProvider);
   ref.watch(databaseChangesProvider);
   final period = ref.watch(leaderboardPeriodProvider);
-
   final db = ref.watch(databaseServiceProvider);
   return db.getLeaderboard(period: period);
 });
 
-/// Fetches historical stress events associated with a specific coworker.
+/// Fetches historical stress events associated with a specific coworker
+/// within the currently selected [LeaderboardPeriod].
 final coworkerEventsProvider =
     FutureProvider.family<List<StressEvent>, String>((ref, name) async {
   ref.watch(databaseChangesProvider);
-
+  final period = ref.watch(leaderboardPeriodProvider);
   final db = ref.watch(databaseServiceProvider);
-  return db.getEventsForCoworker(name);
+  return db.getEventsForCoworker(name, period: period);
 });
 
 /// The total number of stress events recorded in the selected [LeaderboardPeriod].
 final stressEventCountProvider = FutureProvider<int>((ref) async {
-  ref.watch(activeStressEventProvider);
   ref.watch(databaseChangesProvider);
   final period = ref.watch(leaderboardPeriodProvider);
-
   final db = ref.watch(databaseServiceProvider);
   return db.getStressEventCount(period: period);
+});
+
+/// Total stress events recorded since local midnight today.
+final todayStressCountProvider = FutureProvider<int>((ref) async {
+  ref.watch(databaseChangesProvider);
+  final db = ref.watch(databaseServiceProvider);
+  return db.getTodayStressEventCount();
 });

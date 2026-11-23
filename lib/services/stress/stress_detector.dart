@@ -43,6 +43,18 @@ class DetectedStressEpisode {
   });
 }
 
+/// Lifecycle output from processing a single heart rate sample.
+class StressSampleResult {
+  /// Newly confirmed stress episode (emitted once at the 2-min mark).
+  final DetectedStressEpisode? started;
+
+  /// Finalized episode summary when an active confirmed episode recovers or
+  /// terminates on a connection gap.
+  final DetectedStressEpisode? completed;
+
+  const StressSampleResult({this.started, this.completed});
+}
+
 /// Deterministic, pure-Dart state machine that connects [HrSignalFilter],
 /// [BaselineEstimator], and [StressScorer] to detect sustained stress episodes.
 class StressDetector {
@@ -90,7 +102,9 @@ class StressDetector {
   double _episodeHrSum = 0;
   int _episodeSampleCount = 0;
   double _episodeStressLoad = 0;
+  int _episodeBaselineHr = 0;
   bool _episodeAlreadyEmitted = false;
+  bool _episodePersisted = false;
 
   /// Tracks recent samples during an active elevation to compute duty cycle.
   final Queue<({DateTime timestamp, bool aboveExit})> _elevationSamples =
@@ -114,31 +128,57 @@ class StressDetector {
   /// Returns a [DetectedStressEpisode] at the moment a new episode is confirmed,
   /// or `null` otherwise.
   DetectedStressEpisode? processSample(int rawHr, {DateTime? timestamp}) {
-    final now = timestamp ?? DateTime.now();
+    return processSampleWithLifecycle(rawHr, timestamp: timestamp).started;
+  }
 
-    // Check for connection gap that invalidates an in-progress spike timer
-    if (_lastSampleTime != null &&
-        now.difference(_lastSampleTime!) > maxActiveSpikeGap) {
-      _resetEpisodeTracking();
-      if (!baselineEstimator.isReady) {
-        _phase = StressDetectionPhase.warmingUp;
-      } else {
-        _phase = StressDetectionPhase.calm;
+  /// Process a single heart rate reading at [timestamp], returning both newly
+  /// started episodes and finalized metrics for recovering episodes.
+  StressSampleResult processSampleWithLifecycle(
+    int rawHr, {
+    DateTime? timestamp,
+  }) {
+    final now = timestamp ?? DateTime.now();
+    DetectedStressEpisode? completedEpisode;
+
+    final prevSampleTime = _lastSampleTime;
+    final spikeGapExceeded = prevSampleTime != null &&
+        now.difference(prevSampleTime) > maxActiveSpikeGap;
+    final baselineFlushed = baselineEstimator.checkGap(now);
+
+    // Check for connection gap that invalidates an in-progress spike timer or
+    // flushes a stale baseline.
+    if (spikeGapExceeded || baselineFlushed) {
+      if (_episodeAlreadyEmitted && _episodePersisted) {
+        completedEpisode = _buildFinalizedEpisode(
+          prevSampleTime ?? now,
+        );
       }
+      _resetEpisodeTracking();
+      _phase = baselineEstimator.isReady
+          ? StressDetectionPhase.calm
+          : StressDetectionPhase.warmingUp;
     }
+
+    final dtSec = prevSampleTime != null && !spikeGapExceeded
+        ? (now.difference(prevSampleTime).inMilliseconds / 1000.0)
+            .clamp(0.5, maxActiveSpikeGap.inSeconds.toDouble())
+        : 1.0;
     _lastSampleTime = now;
 
     // 1. Filter optical glitches and smooth with 5-sample median
     final clean = signalFilter.process(rawHr, timestamp: now);
-    if (clean == null) return null;
+    if (clean == null) {
+      return StressSampleResult(completed: completedEpisode);
+    }
 
     // 2. If baseline is not yet ready, accumulate warm-up samples
     if (!baselineEstimator.isReady) {
+      _phase = StressDetectionPhase.warmingUp;
       baselineEstimator.addSample(clean, isElevated: false);
       if (baselineEstimator.isReady) {
         _phase = StressDetectionPhase.calm;
       }
-      return null;
+      return StressSampleResult(completed: completedEpisode);
     }
 
     // 3. Score against the current frozen/unfrozen baseline
@@ -153,72 +193,82 @@ class StressDetector {
     switch (_phase) {
       case StressDetectionPhase.warmingUp:
         _phase = StressDetectionPhase.calm;
-        return null;
+        return StressSampleResult(completed: completedEpisode);
 
       case StressDetectionPhase.calm:
         if (score.isAboveEntryThreshold) {
-          _startEpisode(now, rawHr, score.zScore);
+          _startEpisode(now, rawHr, score.zScore, dtSec, baseline.medianHr);
           _phase = StressDetectionPhase.elevated;
         }
-        return null;
+        return StressSampleResult(completed: completedEpisode);
 
       case StressDetectionPhase.elevated:
-        _accumulateEpisodeSample(now, rawHr, score);
+        _accumulateEpisodeSample(now, rawHr, score, dtSec);
 
-        // Evaluate duty cycle in the confirmation window
         final dutyCycle = _currentDutyCycle();
         final elapsed = now.difference(_episodeStartTime!);
 
-        // If HR dropped well below exit threshold and duty cycle fell below minimum
         if (!score.isAboveExitThreshold &&
             elapsed >= const Duration(seconds: 15) &&
             dutyCycle < minConfirmationDutyCycle) {
           _resetEpisodeTracking();
           _phase = StressDetectionPhase.calm;
-          return null;
+          return StressSampleResult(completed: completedEpisode);
         }
 
-        // Check if spike has been sustained for >= spikeDuration with >= 80% duty cycle
         if (elapsed >= spikeDuration && dutyCycle >= minConfirmationDutyCycle) {
           _phase = StressDetectionPhase.stressed;
-          return _maybeEmitConfirmedEpisode(now, baseline.medianHr);
+          final started = _maybeEmitConfirmedEpisode(now, baseline.medianHr);
+          return StressSampleResult(
+            started: started,
+            completed: completedEpisode,
+          );
         }
-        return null;
+        return StressSampleResult(completed: completedEpisode);
 
       case StressDetectionPhase.stressed:
-        _accumulateEpisodeSample(now, rawHr, score);
+        _accumulateEpisodeSample(now, rawHr, score, dtSec);
         if (!score.isAboveExitThreshold) {
           _recoveryStartTime = now;
           _phase = StressDetectionPhase.recovering;
         }
-        return null;
+        return StressSampleResult(completed: completedEpisode);
 
       case StressDetectionPhase.recovering:
-        _accumulateEpisodeSample(now, rawHr, score);
+        _accumulateEpisodeSample(now, rawHr, score, dtSec);
         if (score.isAboveExitThreshold) {
-          // Re-elevated within the merge window -> continues same episode
           _recoveryStartTime = null;
           _phase = StressDetectionPhase.stressed;
-          return null;
+          return StressSampleResult(completed: completedEpisode);
         }
         if (_recoveryStartTime != null &&
             now.difference(_recoveryStartTime!) >= recoveryWindow) {
-          // Fully recovered -> close episode and return to calm
+          if (_episodeAlreadyEmitted && _episodePersisted) {
+            completedEpisode = _buildFinalizedEpisode(now);
+          }
           _resetEpisodeTracking();
           _phase = StressDetectionPhase.calm;
         }
-        return null;
+        return StressSampleResult(completed: completedEpisode);
     }
   }
 
-  void _startEpisode(DateTime now, int rawHr, double zScore) {
+  void _startEpisode(
+    DateTime now,
+    int rawHr,
+    double zScore,
+    double dtSec,
+    double baselineHr,
+  ) {
     _episodeStartTime = now;
     _recoveryStartTime = null;
     _episodePeakHr = rawHr;
     _episodeHrSum = rawHr.toDouble();
     _episodeSampleCount = 1;
-    _episodeStressLoad = math.max(0.0, zScore) / 60.0;
+    _episodeStressLoad = math.max(0.0, zScore) * (dtSec / 60.0);
+    _episodeBaselineHr = baselineHr.round();
     _episodeAlreadyEmitted = false;
+    _episodePersisted = false;
     _elevationSamples
       ..clear()
       ..add((timestamp: now, aboveExit: true));
@@ -228,13 +278,14 @@ class StressDetector {
     DateTime now,
     int rawHr,
     StressSampleScore score,
+    double dtSec,
   ) {
     if (rawHr > _episodePeakHr) {
       _episodePeakHr = rawHr;
     }
     _episodeHrSum += rawHr;
     _episodeSampleCount++;
-    _episodeStressLoad += math.max(0.0, score.zScore) / 60.0;
+    _episodeStressLoad += math.max(0.0, score.zScore) * (dtSec / 60.0);
 
     _elevationSamples.add(
       (timestamp: now, aboveExit: score.isAboveExitThreshold),
@@ -261,13 +312,20 @@ class StressDetector {
 
     if (_lastTriggeredAt != null &&
         now.difference(_lastTriggeredAt!) < cooldownDuration) {
+      _episodePersisted = false;
       return null;
     }
 
     _lastTriggeredAt = now;
-    final start = _episodeStartTime ?? now.subtract(spikeDuration);
+    _episodePersisted = true;
+    _episodeBaselineHr = baselineHr.round();
+    return _buildFinalizedEpisode(now);
+  }
+
+  DetectedStressEpisode _buildFinalizedEpisode(DateTime endTime) {
+    final start = _episodeStartTime ?? endTime.subtract(spikeDuration);
     final durationSecs = math.max(
-      now.difference(start).inSeconds,
+      endTime.difference(start).inSeconds,
       spikeDuration.inSeconds,
     );
     final meanHr = _episodeSampleCount > 0
@@ -276,10 +334,10 @@ class StressDetector {
 
     return DetectedStressEpisode(
       startTime: start,
-      timestamp: now,
+      timestamp: endTime,
       peakHr: _episodePeakHr,
       meanHr: meanHr,
-      baselineHr: baselineHr.round(),
+      baselineHr: _episodeBaselineHr,
       durationSeconds: durationSecs,
       stressLoad: double.parse(_episodeStressLoad.toStringAsFixed(2)),
     );
@@ -292,7 +350,9 @@ class StressDetector {
     _episodeHrSum = 0;
     _episodeSampleCount = 0;
     _episodeStressLoad = 0;
+    _episodeBaselineHr = 0;
     _episodeAlreadyEmitted = false;
+    _episodePersisted = false;
     _elevationSamples.clear();
   }
 

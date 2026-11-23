@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'providers/ble_providers.dart';
+import 'providers/health_sync_providers.dart';
 import 'providers/stress_providers.dart';
 import 'theme/app_theme.dart';
 import 'theme/app_colors.dart';
@@ -74,6 +75,7 @@ class _MainShellState extends ConsumerState<MainShell> {
     unawaited(Future.microtask(() {
       ref.read(autoScanProvider);
       ref.read(stressAnalyzerProvider);
+      ref.read(healthSyncCoordinatorProvider);
     }));
   }
 

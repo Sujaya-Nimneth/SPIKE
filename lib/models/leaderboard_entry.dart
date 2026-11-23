@@ -45,7 +45,7 @@ class LeaderboardEntry {
       maxPeakHr: (map['max_peak_hr'] as int?) ?? avgPeak.round(),
       avgBaselineHr: (map['avg_baseline_hr'] as num?)?.toDouble() ?? 70.0,
       totalDurationSeconds: (map['total_duration_seconds'] as int?) ?? 0,
-      lastSeen: DateTime.parse(map['last_seen'] as String),
+      lastSeen: DateTime.parse(map['last_seen'] as String).toLocal(),
     );
   }
 

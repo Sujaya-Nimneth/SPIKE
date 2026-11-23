@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:smart_ring/main.dart';
 import 'package:smart_ring/models/stress_event.dart';
 import 'package:smart_ring/providers/ble_providers.dart';
+import 'package:smart_ring/providers/health_sync_providers.dart';
 import 'package:smart_ring/providers/stress_providers.dart';
 import 'package:smart_ring/services/ble_service.dart';
 import 'package:smart_ring/services/stress/stress_detector.dart';
@@ -31,6 +32,7 @@ void main() {
           activeStressEventProvider.overrideWith(
             (ref) => const Stream<StressEvent>.empty(),
           ),
+          healthSyncCoordinatorProvider.overrideWithValue(null),
         ],
         child: const SmartRingApp(),
       ),

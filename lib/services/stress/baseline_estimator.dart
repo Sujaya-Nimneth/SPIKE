@@ -30,23 +30,27 @@ class BaselineSnapshot {
 /// 1. Uses **rolling median + MAD** instead of arithmetic mean so outliers
 ///    do not skew the baseline.
 /// 2. **Freezes updates** while the user's HR is elevated (`isElevated = true`),
-///    preventing an active stress spike from contaminating the baseline and
-///    cancelling itself mid-meeting.
+///    up to [maxContinuousFreezeDuration] so active stress spikes cannot
+///    self-contaminate while prolonged posture/activity shifts can eventually
+///    re-anchor.
 /// 3. Uses time-based windowing (`10 minutes`) and preserves the baseline
 ///    across short BLE connection drops (`<= 10 minutes`).
 class BaselineEstimator {
   final Duration windowDuration;
   final int minSamplesToReady;
   final Duration maxGapBeforeFlush;
+  final Duration maxContinuousFreezeDuration;
 
   BaselineEstimator({
     this.windowDuration = const Duration(minutes: 10),
     this.minSamplesToReady = 20,
     this.maxGapBeforeFlush = const Duration(minutes: 10),
+    this.maxContinuousFreezeDuration = const Duration(minutes: 30),
   });
 
   final Queue<CleanHrSample> _samples = Queue();
   DateTime? _lastSeenTimestamp;
+  DateTime? _frozenSince;
   BaselineSnapshot? _cachedSnapshot;
 
   /// Whether enough baseline data has been collected to evaluate stress spikes.
@@ -61,29 +65,46 @@ class BaselineEstimator {
     return _cachedSnapshot ??= _computeSnapshot();
   }
 
-  /// Record a new sample.
-  ///
-  /// When [isElevated] is `true`, the sample is NOT added to the baseline
-  /// buffer so active stress episodes cannot inflate the baseline.
-  void addSample(CleanHrSample sample, {bool isElevated = false}) {
-    final now = sample.timestamp;
-
-    // Flush only if the gap exceeds maxGapBeforeFlush (default 10 minutes)
+  /// Flush stale samples if the gap since the last sample exceeds
+  /// [maxGapBeforeFlush]. Returns `true` if the baseline was flushed.
+  bool checkGap(DateTime now) {
     if (_lastSeenTimestamp != null &&
         now.difference(_lastSeenTimestamp!) > maxGapBeforeFlush) {
       _samples.clear();
       _cachedSnapshot = null;
+      _frozenSince = null;
+      return true;
     }
+    return false;
+  }
+
+  /// Record a new sample.
+  ///
+  /// When [isElevated] is `true`, updates are frozen up to
+  /// [maxContinuousFreezeDuration] so active stress episodes cannot inflate
+  /// the resting baseline.
+  void addSample(CleanHrSample sample, {bool isElevated = false}) {
+    final now = sample.timestamp;
+    checkGap(now);
     _lastSeenTimestamp = now;
 
-    if (!isElevated) {
-      _samples.add(sample);
-      final cutoff = now.subtract(windowDuration);
-      while (_samples.isNotEmpty && _samples.first.timestamp.isBefore(cutoff)) {
-        _samples.removeFirst();
+    if (isElevated) {
+      _frozenSince ??= now;
+      if (now.difference(_frozenSince!) <= maxContinuousFreezeDuration) {
+        return;
       }
-      _cachedSnapshot = null;
+      // Prolonged continuous elevation (e.g. extended walk): allow gradual
+      // re-anchoring so baseline doesn't stay locked indefinitely.
+    } else {
+      _frozenSince = null;
     }
+
+    _samples.add(sample);
+    final cutoff = now.subtract(windowDuration);
+    while (_samples.isNotEmpty && _samples.first.timestamp.isBefore(cutoff)) {
+      _samples.removeFirst();
+    }
+    _cachedSnapshot = null;
   }
 
   BaselineSnapshot _computeSnapshot() {
@@ -120,6 +141,7 @@ class BaselineEstimator {
   void reset() {
     _samples.clear();
     _lastSeenTimestamp = null;
+    _frozenSince = null;
     _cachedSnapshot = null;
   }
 }

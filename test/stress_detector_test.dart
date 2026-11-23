@@ -167,5 +167,99 @@ void main() {
         expect(ep, isNull);
       }
     });
+
+    test('resets to warmingUp after >10m gap and emits completed metrics on recovery', () {
+      final detector = StressDetector(
+        spikeDuration: const Duration(minutes: 2),
+        cooldownDuration: const Duration(minutes: 5),
+        recoveryWindow: const Duration(seconds: 30),
+      );
+      final t0 = DateTime(2026, 1, 1, 10, 0, 0);
+
+      // Calibrate baseline ~68 BPM
+      for (int i = 0; i < 20; i++) {
+        detector.processSample(68, timestamp: t0.add(Duration(seconds: i * 10)));
+      }
+      expect(detector.phase, StressDetectionPhase.calm);
+
+      // Start spike at t0 + 4m; hits 2-min mark at ~t0 + 6m with peak 98
+      final spikeStart = t0.add(const Duration(minutes: 4));
+      DetectedStressEpisode? started;
+      for (int i = 0; i <= 12; i++) {
+        final res = detector.processSampleWithLifecycle(
+          98,
+          timestamp: spikeStart.add(Duration(seconds: i * 10)),
+        );
+        started ??= res.started;
+      }
+      expect(started, isNotNull);
+      expect(started!.peakHr, 98);
+
+      // Peak climbs to 112 BPM while stressed
+      for (int i = 13; i <= 18; i++) {
+        detector.processSampleWithLifecycle(
+          112,
+          timestamp: spikeStart.add(Duration(seconds: i * 10)),
+        );
+      }
+
+      // Recover back to 68 BPM for >= recoveryWindow (30s)
+      final recStart = spikeStart.add(const Duration(minutes: 3, seconds: 10));
+      DetectedStressEpisode? completed;
+      for (int i = 0; i <= 4; i++) {
+        final res = detector.processSampleWithLifecycle(
+          68,
+          timestamp: recStart.add(Duration(seconds: i * 10)),
+        );
+        completed ??= res.completed;
+      }
+
+      expect(completed, isNotNull);
+      expect(completed!.peakHr, 112);
+      expect(completed.durationSeconds, greaterThanOrEqualTo(220));
+      expect(detector.phase, StressDetectionPhase.calm);
+
+      // Gap > 10 minutes flushes baseline -> must revert to warmingUp
+      final afterLongGap = recStart.add(const Duration(minutes: 15));
+      detector.processSampleWithLifecycle(70, timestamp: afterLongGap);
+      expect(detector.phase, StressDetectionPhase.warmingUp);
+      expect(detector.baselineEstimator.isReady, isFalse);
+    });
+  });
+
+  group('BaselineEstimator prolonged freeze', () {
+    test('allows baseline re-anchoring after maxContinuousFreezeDuration', () {
+      final estimator = BaselineEstimator(
+        minSamplesToReady: 5,
+        maxContinuousFreezeDuration: const Duration(minutes: 30),
+      );
+      final t0 = DateTime(2026, 1, 1, 9, 0, 0);
+
+      for (int i = 0; i < 5; i++) {
+        estimator.addSample(
+          CleanHrSample(
+            timestamp: t0.add(Duration(seconds: i * 10)),
+            rawHr: 65,
+            smoothedHr: 65.0,
+          ),
+          isElevated: false,
+        );
+      }
+      expect(estimator.current!.medianHr, 65.0);
+
+      // Elevated for 36 minutes after freeze begins at m=5 (samples every 5m stay <= 10m gap)
+      for (int m = 5; m <= 40; m += 5) {
+        estimator.addSample(
+          CleanHrSample(
+            timestamp: t0.add(Duration(minutes: m)),
+            rawHr: 92,
+            smoothedHr: 92.0,
+          ),
+          isElevated: true,
+        );
+      }
+      // After >30m continuous freeze, new samples are allowed into the window
+      expect(estimator.current!.medianHr, greaterThan(65.0));
+    });
   });
 }

@@ -18,13 +18,13 @@ class CleanHrSample {
 ///
 /// Pipeline:
 /// 1. Physiological range gate (`35..210` BPM).
-/// 2. Slew-rate artifact gate (rejects instantaneous jumps `> 25 BPM/s`
+/// 2. Slew-rate artifact gate (rejects instantaneous jumps `> 15 BPM/s`
 ///    when consecutive samples arrive within 5 seconds).
 /// 3. Sliding 5-sample median filter over recent samples (`<= 15s` old).
 class HrSignalFilter {
   static const int minValidHr = 35;
   static const int maxValidHr = 210;
-  static const double maxSlewBpmPerSec = 25.0;
+  static const double maxSlewBpmPerSec = 15.0;
   static const int medianWindowSize = 5;
   static const Duration medianMaxAge = Duration(seconds: 15);
 
@@ -46,11 +46,10 @@ class HrSignalFilter {
     // 2. Slew-rate jump rejection for back-to-back optical glitches
     if (_lastAcceptedTime != null && _lastAcceptedHr != null) {
       final dtMs = now.difference(_lastAcceptedTime!).inMilliseconds;
-      if (dtMs > 0 && dtMs <= 5000) {
-        final dtSec = dtMs / 1000.0;
+      if (dtMs <= 5000) {
+        final dtSec = (dtMs / 1000.0).clamp(0.5, 5.0);
         final jump = (rawHr - _lastAcceptedHr!).abs();
-        // Allow at least 18 BPM step for 1 Hz sampling, or 25 BPM/s
-        final maxAllowedJump = (maxSlewBpmPerSec * dtSec).clamp(18.0, 60.0);
+        final maxAllowedJump = (maxSlewBpmPerSec * dtSec).clamp(15.0, 45.0);
         if (jump > maxAllowedJump) {
           return null;
         }
