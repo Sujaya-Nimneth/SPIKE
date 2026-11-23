@@ -1,5 +1,6 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../theme/app_colors.dart';
 
 /// A frosted-glass bottom navigation bar with 5 tabs.
@@ -15,7 +16,7 @@ class AppBottomNavBar extends StatelessWidget {
 
   static const List<_NavItem> _items = [
     _NavItem(icon: Icons.sunny, label: 'Today'),
-    _NavItem(icon: Icons.bolt_rounded, label: 'Calm'),
+    _NavItem(icon: Icons.favorite_rounded, label: 'Vitals'),
     _NavItem(icon: Icons.nightlight_round, label: 'Sleep'),
     _NavItem(icon: Icons.local_fire_department_rounded, label: 'Activity'),
     _NavItem(icon: Icons.whatshot_rounded, label: 'Stress'),
@@ -52,7 +53,12 @@ class AppBottomNavBar extends StatelessWidget {
                       isActive: isActive,
                       color:
                           isActive ? AppColors.navActive : AppColors.navInactive,
-                      onTap: () => onTap(index),
+                      onTap: () {
+                        if (!isActive) {
+                          HapticFeedback.selectionClick();
+                        }
+                        onTap(index);
+                      },
                     );
                   }),
                 ),
@@ -88,58 +94,63 @@ class _NavBarButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: SizedBox(
-        width: 64,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Active indicator dot
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 250),
-              curve: Curves.easeOut,
-              width: isActive ? 4 : 0,
-              height: 4,
-              margin: const EdgeInsets.only(bottom: 6),
-              decoration: BoxDecoration(
-                color: isActive ? AppColors.pastelTeal : Colors.transparent,
-                borderRadius: BorderRadius.circular(2),
-                boxShadow: isActive
-                    ? [
-                        BoxShadow(
-                          color: AppColors.pastelTeal.withValues(alpha: 0.5),
-                          blurRadius: 6,
-                        ),
-                      ]
-                    : const [],
+    return Semantics(
+      button: true,
+      selected: isActive,
+      label: label,
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: SizedBox(
+          width: 64,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Active indicator dot
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 250),
+                curve: Curves.easeOut,
+                width: isActive ? 4 : 0,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 6),
+                decoration: BoxDecoration(
+                  color: isActive ? AppColors.pastelTeal : Colors.transparent,
+                  borderRadius: BorderRadius.circular(2),
+                  boxShadow: isActive
+                      ? [
+                          BoxShadow(
+                            color: AppColors.pastelTeal.withValues(alpha: 0.5),
+                            blurRadius: 6,
+                          ),
+                        ]
+                      : const [],
+                ),
               ),
-            ),
-            // Icon
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 200),
-              child: Icon(
-                icon,
-                key: ValueKey('$icon-$isActive'),
-                color: color,
-                size: isActive ? 26 : 24,
+              // Icon
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 200),
+                child: Icon(
+                  icon,
+                  key: ValueKey('$icon-$isActive'),
+                  color: color,
+                  size: isActive ? 26 : 24,
+                ),
               ),
-            ),
-            const SizedBox(height: 4),
-            // Label
-            Text(
-              label,
-              style: TextStyle(
-                color: color,
-                fontSize: 10,
-                fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
-                letterSpacing: 0.2,
+              const SizedBox(height: 4),
+              // Label
+              Text(
+                label,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 10,
+                  fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
+                  letterSpacing: 0.2,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

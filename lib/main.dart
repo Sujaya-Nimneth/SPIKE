@@ -2,22 +2,23 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'models/stress_event.dart';
 import 'providers/ble_providers.dart';
 import 'providers/health_sync_providers.dart';
 import 'providers/stress_providers.dart';
-import 'theme/app_theme.dart';
-import 'theme/app_colors.dart';
-import 'screens/home_screen.dart';
-import 'screens/sleep_screen.dart';
 import 'screens/activity_screen.dart';
-import 'screens/vitals_screen.dart';
+import 'screens/home_screen.dart';
 import 'screens/leaderboard_screen.dart';
+import 'screens/sleep_screen.dart';
+import 'screens/vitals_screen.dart';
+import 'theme/app_colors.dart';
+import 'theme/app_theme.dart';
 import 'widgets/bottom_nav_bar.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Force dark status bar icons on the dark background
+  // Force light status bar icons on the dark background
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
@@ -48,8 +49,8 @@ class SmartRingApp extends StatelessWidget {
 
 /// The main shell that hosts the bottom navigation and screen stack.
 ///
-/// Lazily mounts tabs on first visit and disables tickers on inactive tabs
-/// so offscreen screens do not consume CPU/GPU frames.
+/// Lazily mounts tabs on first visit, disables tickers on inactive tabs,
+/// and surfaces live stress spike alerts globally.
 class MainShell extends ConsumerStatefulWidget {
   const MainShell({super.key});
 
@@ -58,7 +59,6 @@ class MainShell extends ConsumerStatefulWidget {
 }
 
 class _MainShellState extends ConsumerState<MainShell> {
-  int _currentIndex = 0;
   final Set<int> _visitedTabs = {0};
 
   static const _screens = <Widget>[
@@ -79,32 +79,68 @@ class _MainShellState extends ConsumerState<MainShell> {
     }));
   }
 
+  void _switchTab(int index) {
+    if (index < 0 || index >= _screens.length) return;
+    if (!_visitedTabs.contains(index)) {
+      setState(() => _visitedTabs.add(index));
+    }
+    ref.read(selectedTabProvider.notifier).state = index;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final currentIndex = ref.watch(selectedTabProvider);
+    if (!_visitedTabs.contains(currentIndex)) {
+      _visitedTabs.add(currentIndex);
+    }
+
+    // Listen for real-time detected stress spikes and offer quick tagging
+    ref.listen<AsyncValue<StressEvent>>(activeStressEventProvider, (_, next) {
+      next.whenData((event) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: AppColors.surfaceLight,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+            content: Text(
+              event.isTagged
+                  ? 'Stress spike (${event.peakHr} bpm) auto-tagged to ${event.attendees.join(', ')}'
+                  : 'Stress spike detected (${event.peakHr} bpm)',
+              style: const TextStyle(color: AppColors.textPrimary),
+            ),
+            action: event.isTagged
+                ? null
+                : SnackBarAction(
+                    label: 'Tag',
+                    textColor: AppColors.pastelCoral,
+                    onPressed: () => _switchTab(4),
+                  ),
+          ),
+        );
+      });
+    });
+
     return Scaffold(
       backgroundColor: AppColors.background,
       extendBody: true,
       body: IndexedStack(
-        index: _currentIndex,
+        index: currentIndex,
         children: List.generate(_screens.length, (index) {
           if (!_visitedTabs.contains(index)) {
             return const SizedBox.shrink();
           }
           return TickerMode(
-            enabled: index == _currentIndex,
+            enabled: index == currentIndex,
             child: _screens[index],
           );
         }),
       ),
       bottomNavigationBar: AppBottomNavBar(
-        currentIndex: _currentIndex,
-        onTap: (index) {
-          if (index == _currentIndex) return;
-          setState(() {
-            _visitedTabs.add(index);
-            _currentIndex = index;
-          });
-        },
+        currentIndex: currentIndex,
+        onTap: _switchTab,
       ),
     );
   }

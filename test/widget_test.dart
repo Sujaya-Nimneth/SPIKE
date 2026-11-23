@@ -2,6 +2,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:smart_ring/main.dart';
+import 'package:smart_ring/models/daily_activity.dart';
+import 'package:smart_ring/models/device_sync_status.dart';
+import 'package:smart_ring/models/sleep_session.dart';
 import 'package:smart_ring/models/stress_event.dart';
 import 'package:smart_ring/providers/ble_providers.dart';
 import 'package:smart_ring/providers/health_sync_providers.dart';
@@ -29,10 +32,28 @@ void main() {
           stressPhaseProvider.overrideWith(
             (ref) => Stream.value(StressDetectionPhase.warmingUp),
           ),
+          baselineHrProvider.overrideWith((ref) => Stream.value(null)),
           activeStressEventProvider.overrideWith(
             (ref) => const Stream<StressEvent>.empty(),
           ),
           healthSyncCoordinatorProvider.overrideWithValue(null),
+          deviceSyncStatusProvider.overrideWith(
+            (ref) async => DeviceSyncStatus.empty,
+          ),
+          latestHrSummaryProvider.overrideWith((ref) async => null),
+          recentHrSummariesProvider.overrideWith((ref) async => const []),
+          dailyHrAveragesProvider.overrideWith(
+            (ref) async => (avgDailyHr: null, avgRestingHr: null, daysCount: 0),
+          ),
+          latestActivityProvider.overrideWith((ref) async => null),
+          activityAveragesProvider.overrideWith(
+            (ref) async => ActivityAverages.empty,
+          ),
+          latestSleepProvider.overrideWith((ref) async => null),
+          sleepAveragesProvider.overrideWith(
+            (ref) async => SleepAverages.empty,
+          ),
+          todayStressCountProvider.overrideWith((ref) async => 0),
         ],
         child: const SmartRingApp(),
       ),
@@ -40,6 +61,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('SPIKE'), findsOneWidget);
-    expect(find.text('88'), findsNWidgets(2));
+    expect(find.text('READY'), findsOneWidget);
+    expect(find.text('Awaiting Ring Sync'), findsOneWidget);
   });
 }
