@@ -9,6 +9,7 @@ import 'package:smart_ring/models/stress_event.dart';
 import 'package:smart_ring/providers/ble_providers.dart';
 import 'package:smart_ring/providers/health_sync_providers.dart';
 import 'package:smart_ring/providers/stress_providers.dart';
+import 'package:smart_ring/providers/update_providers.dart';
 import 'package:smart_ring/services/ble_service.dart';
 import 'package:smart_ring/services/stress/stress_detector.dart';
 
@@ -54,6 +55,7 @@ void main() {
             (ref) async => SleepAverages.empty,
           ),
           todayStressCountProvider.overrideWith((ref) async => 0),
+          autoUpdateCheckProvider.overrideWith((ref) async => null),
         ],
         child: const SmartRingApp(),
       ),
