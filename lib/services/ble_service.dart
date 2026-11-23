@@ -1,7 +1,12 @@
 import 'dart:async';
+import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import '../models/daily_activity.dart';
+import '../models/sleep_session.dart';
 import '../utils/app_logger.dart';
 import 'colmi_protocol.dart';
+import 'foreground_service_bridge.dart';
 
 /// Connection states for the BLE service.
 enum BleConnectionState {
@@ -17,10 +22,13 @@ enum BleConnectionState {
 ///
 /// Handles scanning for 'R02' devices, connecting, subscribing to the Colmi
 /// UART notify characteristic, maintaining all-day real-time heart rate
-/// streaming with periodic keep-alive packets, and auto-reconnecting with
-/// exponential backoff.
+/// streaming with periodic keep-alive packets, syncing activity (`0x43`) and
+/// sleep (`0xBC`/`0x27`) telemetry, managing the Android `connectedDevice`
+/// foreground service, and auto-reconnecting with exponential backoff.
 class BleService {
-  BleService();
+  BleService({ForegroundServiceBridge? foregroundServiceBridge})
+      : _foregroundService =
+            foregroundServiceBridge ?? ForegroundServiceBridge();
 
   static const _tag = 'BLE';
 
@@ -39,6 +47,10 @@ class BleService {
     Duration(seconds: 60),
   ];
 
+  final ForegroundServiceBridge _foregroundService;
+  final ColmiSportDetailAccumulator _sportDetailAccumulator =
+      ColmiSportDetailAccumulator();
+
   // ── Private State ───────────────────────────────────────────
   BluetoothDevice? _connectedDevice;
   BluetoothDevice? _lastKnownDevice;
@@ -48,6 +60,8 @@ class BleService {
   StreamSubscription<BluetoothConnectionState>? _connectionSub;
   StreamSubscription<List<ScanResult>>? _scanSub;
   StreamSubscription<bool>? _isScanningSub;
+  StreamSubscription<BluetoothAdapterState>? _adapterStateSub;
+  BluetoothAdapterState? _lastAdapterState;
 
   Timer? _keepAliveTimer;
   Timer? _reconnectTimer;
@@ -56,7 +70,10 @@ class BleService {
   int _reconnectAttempt = 0;
 
   bool _isConnecting = false;
+  bool _isHandlingDisconnect = false;
   bool _isStreamingHr = false;
+  bool _keepAliveInFlight = false;
+  bool _isSyncingTelemetry = false;
   bool _userRequestedDisconnect = false;
   bool _sawScanningTrue = false;
 
@@ -65,11 +82,15 @@ class BleService {
       StreamController<BleConnectionState>.broadcast();
   final _batteryController =
       StreamController<({int percent, bool isCharging})>.broadcast();
+  final _activitySyncController =
+      StreamController<DailyActivityRecord>.broadcast();
+  final _sleepSyncController =
+      StreamController<SleepSessionRecord>.broadcast();
 
   BleConnectionState _currentState = BleConnectionState.disconnected;
   ({int percent, bool isCharging})? _latestBattery;
 
-  /// Buffer for assembling complete 16-byte packets from potentially
+  /// Buffer for assembling complete 16-byte / BigData packets from potentially
   /// chunked MTU payloads.
   final List<int> _packetBuffer = [];
 
@@ -89,6 +110,13 @@ class BleService {
   Stream<({int percent, bool isCharging})> get batteryStream =>
       _batteryController.stream;
 
+  /// Stream of synced daily activity summaries (`0x43` Sports Detail).
+  Stream<DailyActivityRecord> get activitySyncStream =>
+      _activitySyncController.stream;
+
+  /// Stream of synced nightly sleep sessions (`0xBC` / `0x27` BigData).
+  Stream<SleepSessionRecord> get sleepSyncStream => _sleepSyncController.stream;
+
   /// The current connection state.
   BleConnectionState get currentState => _currentState;
 
@@ -98,13 +126,40 @@ class BleService {
   /// The currently connected device, if any.
   BluetoothDevice? get connectedDevice => _connectedDevice;
 
+  // ── Adapter State Watcher ───────────────────────────────────
+
+  void _ensureAdapterStateListener() {
+    if (_adapterStateSub != null || _disposed) return;
+    try {
+      _adapterStateSub = FlutterBluePlus.adapterState.listen((state) {
+        final previous = _lastAdapterState;
+        _lastAdapterState = state;
+        if (_disposed) return;
+
+        if (previous != null &&
+            previous != BluetoothAdapterState.on &&
+            state == BluetoothAdapterState.on &&
+            !_userRequestedDisconnect &&
+            !_isConnecting &&
+            (_currentState == BleConnectionState.disconnected ||
+                _currentState == BleConnectionState.error)) {
+          AppLogger.info(_tag, 'Bluetooth turned ON — resuming scan/reconnect');
+          _reconnectAttempt = 0;
+          unawaited(startScan());
+        }
+      });
+    } catch (e) {
+      AppLogger.warn(_tag, 'Unable to attach adapterState listener', e);
+    }
+  }
+
   // ── Scanning ────────────────────────────────────────────────
 
   /// Start scanning for nearby BLE devices whose name contains 'R02'.
-  ///
-  /// Once found, automatically connects to the first matching device.
   Future<void> startScan() async {
     if (_disposed) return;
+    _ensureAdapterStateListener();
+
     if (_isConnecting ||
         _currentState == BleConnectionState.scanning ||
         _currentState == BleConnectionState.connecting ||
@@ -122,6 +177,7 @@ class BleService {
       AppLogger.info(_tag, 'forceStartScan: disposed, returning');
       return;
     }
+    _ensureAdapterStateListener();
 
     if (_currentState == BleConnectionState.connected || _isConnecting) {
       AppLogger.info(_tag, 'forceStartScan: already connected/connecting');
@@ -142,23 +198,35 @@ class BleService {
     await _performScan();
   }
 
-  /// Internal scan logic shared by [startScan] and [forceStartScan].
   Future<void> _performScan() async {
     if (_disposed) return;
-    AppLogger.info(_tag, '_performScan: checking adapter state...');
+    AppLogger.info(_tag, '_performScan: waiting for known adapter state...');
 
     try {
-      final adapterState = await FlutterBluePlus.adapterState.first
-          .timeout(const Duration(seconds: 3));
+      final adapterState = await FlutterBluePlus.adapterState
+          .where((s) => s != BluetoothAdapterState.unknown)
+          .first
+          .timeout(const Duration(seconds: 4));
+      _lastAdapterState = adapterState;
       AppLogger.info(_tag, '_performScan: adapter state = $adapterState');
 
       if (adapterState != BluetoothAdapterState.on) {
-        AppLogger.info(_tag, '_performScan: BT is off, trying to turn on...');
-        try {
-          await FlutterBluePlus.turnOn();
-        } catch (e) {
-          AppLogger.warn(_tag, '_performScan: turnOn failed', e);
-          _updateState(BleConnectionState.error);
+        if (!kIsWeb && Platform.isAndroid) {
+          AppLogger.info(_tag, '_performScan: BT is off, trying to turn on...');
+          try {
+            await FlutterBluePlus.turnOn();
+          } catch (e) {
+            AppLogger.warn(_tag, '_performScan: turnOn failed', e);
+            _updateState(BleConnectionState.error);
+            return;
+          }
+        } else {
+          // On iOS/macOS, Bluetooth cannot be toggled programmatically.
+          AppLogger.info(
+            _tag,
+            '_performScan: BT unavailable ($adapterState) on non-Android',
+          );
+          _updateState(BleConnectionState.disconnected);
           return;
         }
       }
@@ -166,13 +234,13 @@ class BleService {
       AppLogger.warn(_tag, '_performScan: adapter check timed out', e);
     }
 
+    if (_disposed) return;
     _updateState(BleConnectionState.scanning);
 
     await _scanSub?.cancel();
     await _isScanningSub?.cancel();
     _sawScanningTrue = false;
 
-    // Listen for scan results
     _scanSub = FlutterBluePlus.scanResults.listen((results) {
       if (_isConnecting ||
           _currentState == BleConnectionState.connecting ||
@@ -181,11 +249,11 @@ class BleService {
       }
 
       for (final result in results) {
-        final name = result.device.platformName;
+        final name = _resolveScanName(result);
         if (name.isNotEmpty) {
           AppLogger.verbose(
             _tag,
-            'Discovered ${result.device.platformName} (RSSI: ${result.rssi})',
+            'Discovered $name (RSSI: ${result.rssi})',
           );
         }
         if (name.toLowerCase().contains('r02')) {
@@ -194,13 +262,12 @@ class BleService {
           unawaited(FlutterBluePlus.stopScan());
           unawaited(_scanSub?.cancel());
           unawaited(_isScanningSub?.cancel());
-          unawaited(_connect(result.device));
+          unawaited(_connect(result.device, displayName: name));
           return;
         }
       }
     });
 
-    // Track actual scan lifecycle via FlutterBluePlus.isScanning
     _isScanningSub = FlutterBluePlus.isScanning.listen((scanning) {
       if (scanning) {
         _sawScanningTrue = true;
@@ -227,6 +294,13 @@ class BleService {
     }
   }
 
+  static String _resolveScanName(ScanResult result) {
+    if (result.device.platformName.isNotEmpty) {
+      return result.device.platformName;
+    }
+    return result.advertisementData.advName;
+  }
+
   /// Stop an active scan.
   Future<void> stopScan() async {
     await _isScanningSub?.cancel();
@@ -246,21 +320,23 @@ class BleService {
   /// Connect to a specific BLE device (e.g. selected from Settings).
   Future<void> connectToDevice(BluetoothDevice device) async {
     if (_disposed || _isConnecting) return;
+    _ensureAdapterStateListener();
     _userRequestedDisconnect = false;
     _isConnecting = true;
     await stopScan();
     await _connect(device);
   }
 
-  /// Connect to a specific BLE device, discover the Colmi UART service,
-  /// and subscribe to notifications.
-  Future<void> _connect(BluetoothDevice device) async {
+  Future<void> _connect(
+    BluetoothDevice device, {
+    String? displayName,
+  }) async {
     _isConnecting = true;
     _reconnectTimer?.cancel();
-    AppLogger.info(
-      _tag,
-      'Connecting to ${device.platformName} (${device.remoteId})...',
-    );
+    final label = device.platformName.isNotEmpty
+        ? device.platformName
+        : (displayName ?? device.remoteId.str);
+    AppLogger.info(_tag, 'Connecting to $label (${device.remoteId})...');
     _updateState(BleConnectionState.connecting);
 
     try {
@@ -270,18 +346,22 @@ class BleService {
       );
       AppLogger.info(_tag, 'device.connect() succeeded');
 
-      _connectedDevice = device;
-      _lastKnownDevice = device;
-
-      // Discover services and set up characteristics before marking connected
+      // Discover services and verify Colmi UART characteristics BEFORE
+      // saving _connectedDevice / _lastKnownDevice so non-Colmi devices
+      // never poison reconnect state.
       await _discoverAndSubscribe(device);
       AppLogger.info(_tag, 'Service discovery and subscription succeeded');
 
-      // Listen for unexpected disconnection events
+      _connectedDevice = device;
+      _lastKnownDevice = device;
+
       await _connectionSub?.cancel();
       _connectionSub = device.connectionState.listen((state) {
         AppLogger.info(_tag, 'connectionState event: $state');
-        if (state == BluetoothConnectionState.disconnected) {
+        if (state == BluetoothConnectionState.disconnected &&
+            !_isConnecting &&
+            !_isHandlingDisconnect &&
+            _connectedDevice == device) {
           unawaited(_onDisconnected());
         }
       });
@@ -290,22 +370,34 @@ class BleService {
       _reconnectAttempt = 0;
       _updateState(BleConnectionState.connected);
 
-      // Start all-day HR streaming & query initial battery automatically
+      unawaited(
+        _foregroundService.start(
+          title: 'Spike · $label',
+          text: 'Streaming heart rate & stress telemetry',
+        ),
+      );
+
+      // Start all-day HR streaming, sync ring clock, and query battery
       await startHeartRateStream();
+      await syncDeviceTime();
       await requestBattery();
+      unawaited(_syncInitialTelemetry());
     } catch (e, stack) {
       AppLogger.error(_tag, 'Error connecting to device', e, stack);
       _isConnecting = false;
+      try {
+        await device.disconnect();
+      } catch (_) {}
       await _cleanup();
       _updateState(BleConnectionState.error);
-      if (!_userRequestedDisconnect && !_disposed) {
+      if (!_userRequestedDisconnect &&
+          !_disposed &&
+          _lastKnownDevice != null) {
         _scheduleReconnect();
       }
     }
   }
 
-  /// Discover the Colmi UART service and subscribe to the notify
-  /// characteristic.
   Future<void> _discoverAndSubscribe(BluetoothDevice device) async {
     final services = await device.discoverServices();
 
@@ -322,18 +414,23 @@ class BleService {
       throw Exception('Colmi UART service not found on device');
     }
 
+    BluetoothCharacteristic? writeChar;
+    BluetoothCharacteristic? notifyChar;
     for (final char in uartService.characteristics) {
       final uuid = char.uuid.toString().toLowerCase();
       if (uuid == ColmiUuids.writeChar.toLowerCase()) {
-        _writeChar = char;
+        writeChar = char;
       } else if (uuid == ColmiUuids.notifyChar.toLowerCase()) {
-        _notifyChar = char;
+        notifyChar = char;
       }
     }
 
-    if (_writeChar == null || _notifyChar == null) {
+    if (writeChar == null || notifyChar == null) {
       throw Exception('Required Colmi characteristics not found');
     }
+
+    _writeChar = writeChar;
+    _notifyChar = notifyChar;
 
     await _notifyChar!.setNotifyValue(true);
     await _notifySub?.cancel();
@@ -341,9 +438,6 @@ class BleService {
   }
 
   /// Disconnect from the currently connected device (user-initiated).
-  ///
-  /// Sets [_userRequestedDisconnect] so auto-reconnect does not immediately
-  /// reconnect behind the user's back.
   Future<void> disconnect() async {
     _userRequestedDisconnect = true;
     _reconnectTimer?.cancel();
@@ -357,6 +451,7 @@ class BleService {
       await _connectedDevice?.disconnect();
     } catch (_) {}
     await _cleanup();
+    await _foregroundService.stop();
     _updateState(BleConnectionState.disconnected);
   }
 
@@ -381,28 +476,31 @@ class BleService {
   Future<void> _sendKeepAliveTick() async {
     if (_disposed ||
         !_isStreamingHr ||
+        _keepAliveInFlight ||
         _currentState != BleConnectionState.connected ||
         _writeChar == null) {
       return;
     }
 
-    _keepAliveTickCount++;
-    final now = DateTime.now();
+    _keepAliveInFlight = true;
+    try {
+      _keepAliveTickCount++;
+      final now = DateTime.now();
 
-    // If the ring stopped emitting HR packets for >30s, send a fresh Start
-    // command to re-engage the optical sensor; otherwise send Continue.
-    if (_lastHrReceivedAt != null &&
-        now.difference(_lastHrReceivedAt!) > _hrWatchdogTimeout) {
-      AppLogger.info(_tag, 'HR watchdog triggered — re-sending start command');
-      _lastHrReceivedAt = now;
-      await _safeWrite(ColmiPacket.startRealtimeHeartRate());
-    } else {
-      await _safeWrite(ColmiPacket.continueRealtimeHeartRate());
-    }
+      if (_lastHrReceivedAt != null &&
+          now.difference(_lastHrReceivedAt!) > _hrWatchdogTimeout) {
+        AppLogger.info(_tag, 'HR watchdog triggered — re-sending start command');
+        _lastHrReceivedAt = now;
+        await _safeWrite(ColmiPacket.startRealtimeHeartRate());
+      } else {
+        await _safeWrite(ColmiPacket.continueRealtimeHeartRate());
+      }
 
-    // Refresh battery level roughly every 2 minutes (10 * 12s)
-    if (_keepAliveTickCount % 10 == 0) {
-      await requestBattery();
+      if (_keepAliveTickCount % 10 == 0) {
+        await requestBattery();
+      }
+    } finally {
+      _keepAliveInFlight = false;
     }
   }
 
@@ -416,17 +514,89 @@ class BleService {
     await _safeWrite(ColmiPacket.stopRealtimeHeartRate());
   }
 
+  // ── Ring Commands & Telemetry Sync ──────────────────────────
+
   /// Request battery status from the ring.
   Future<void> requestBattery() async {
     if (_writeChar == null) return;
     await _safeWrite(ColmiPacket.requestBattery());
   }
 
+  /// Blink the ring LED to help locate it (`Cmd 80`).
+  Future<void> findDevice() async {
+    if (_writeChar == null) return;
+    await _safeWrite(ColmiPacket.findDevice());
+  }
+
+  /// Synchronize the ring's internal RTC clock with local system time (`Cmd 1`).
+  Future<void> syncDeviceTime() async {
+    if (_writeChar == null) return;
+    await _safeWrite(ColmiPacket.setTime(DateTime.now()));
+  }
+
+  /// Request daily step/calorie/distance history (`0x43`) for [daysBack] days.
+  Future<void> syncActivity({int daysBack = 7}) async {
+    if (_writeChar == null || _currentState != BleConnectionState.connected) {
+      return;
+    }
+    _sportDetailAccumulator.reset();
+    final count = daysBack.clamp(1, 14);
+    for (int offset = 0; offset < count; offset++) {
+      if (_disposed ||
+          _writeChar == null ||
+          _currentState != BleConnectionState.connected) {
+        break;
+      }
+      await _safeWrite(ColmiPacket.requestSportDetail(dayOffset: offset));
+      await Future<void>.delayed(const Duration(milliseconds: 140));
+    }
+    // Flush any pending slots if the ring didn't send an explicit 0xFF marker.
+    final remaining = _sportDetailAccumulator.drainCompleted();
+    for (final record in remaining) {
+      if (!_activitySyncController.isClosed) {
+        _activitySyncController.add(record);
+      }
+    }
+  }
+
+  /// Request BigData sleep logs (`0xBC` / `0x27`) from the ring.
+  Future<void> syncSleep() async {
+    if (_writeChar == null || _currentState != BleConnectionState.connected) {
+      return;
+    }
+    await _safeWrite(ColmiPacket.requestSleepBigData());
+  }
+
+  /// Run a full clock + battery + activity + sleep synchronization pass.
+  Future<void> syncAllTelemetry({int activityDaysBack = 7}) async {
+    if (_isSyncingTelemetry ||
+        _writeChar == null ||
+        _currentState != BleConnectionState.connected) {
+      return;
+    }
+    _isSyncingTelemetry = true;
+    try {
+      await syncDeviceTime();
+      await requestBattery();
+      await syncActivity(daysBack: activityDaysBack);
+      await syncSleep();
+    } finally {
+      _isSyncingTelemetry = false;
+    }
+  }
+
+  Future<void> _syncInitialTelemetry() async {
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    if (_disposed || _currentState != BleConnectionState.connected) return;
+    await syncAllTelemetry(activityDaysBack: 3);
+  }
+
   Future<void> _safeWrite(List<int> packet) async {
     final characteristic = _writeChar;
     if (characteristic == null) return;
     try {
-      await characteristic.write(packet, withoutResponse: true);
+      final withoutResponse = characteristic.properties.writeWithoutResponse;
+      await characteristic.write(packet, withoutResponse: withoutResponse);
     } catch (e) {
       AppLogger.warn(_tag, 'BLE write failed', e);
     }
@@ -440,53 +610,84 @@ class BleService {
 
   // ── Private Helpers ─────────────────────────────────────────
 
-  /// Handle an incoming notification payload from the ring.
-  ///
-  /// Uses [ColmiParser.extractValidPackets] for 1-byte sliding-window CRC
-  /// resynchronization so partial or corrupted notifications never wedge
-  /// the packet stream.
   void _onNotificationReceived(List<int> data) {
     _packetBuffer.addAll(data);
 
-    final packets = ColmiParser.extractValidPackets(_packetBuffer);
-    for (final packet in packets) {
-      final cmdId = ColmiParser.commandId(packet);
+    final frames = ColmiParser.extractFrames(_packetBuffer);
+    for (final frame in frames) {
+      switch (frame) {
+        case ColmiStandardFrame(:final packet):
+          _handleStandardPacket(packet);
+        case ColmiBigDataFrame(:final dataId, :final payload):
+          _handleBigDataFrame(dataId, payload);
+      }
+    }
+  }
 
-      switch (cmdId) {
-        case ColmiCommandId.realtimeHeartRate:
-        case ColmiCommandId.dataRequest:
-          final hr = ColmiParser.parseRealtimeHeartRate(packet);
-          if (hr != null && !_heartRateController.isClosed) {
-            _lastHrReceivedAt = DateTime.now();
-            _heartRateController.add(hr);
-          }
-          break;
+  void _handleStandardPacket(List<int> packet) {
+    final cmdId = ColmiParser.commandId(packet);
 
-        case ColmiCommandId.battery:
-          final battery = ColmiParser.parseBattery(packet);
-          if (battery != null && !_batteryController.isClosed) {
-            _latestBattery = battery;
-            _batteryController.add(battery);
+    switch (cmdId) {
+      case ColmiCommandId.realtimeHeartRate:
+      case ColmiCommandId.dataRequest:
+        final hr = ColmiParser.parseRealtimeHeartRate(packet);
+        if (hr != null && !_heartRateController.isClosed) {
+          _lastHrReceivedAt = DateTime.now();
+          _heartRateController.add(hr);
+        }
+
+      case ColmiCommandId.battery:
+        final battery = ColmiParser.parseBattery(packet);
+        if (battery != null && !_batteryController.isClosed) {
+          _latestBattery = battery;
+          _batteryController.add(battery);
+        }
+
+      case ColmiCommandId.sportDetail:
+        final records = _sportDetailAccumulator.feed(packet);
+        for (final record in records) {
+          if (!_activitySyncController.isClosed) {
+            _activitySyncController.add(record);
           }
-          break;
+        }
+    }
+  }
+
+  void _handleBigDataFrame(int dataId, List<int> payload) {
+    if (dataId == ColmiBigDataId.sleep) {
+      final sessions = ColmiParser.parseSleepBigData(payload);
+      for (final session in sessions) {
+        if (!_sleepSyncController.isClosed) {
+          _sleepSyncController.add(session);
+        }
       }
     }
   }
 
   /// Called when the device disconnects unexpectedly.
   Future<void> _onDisconnected() async {
-    await _cleanup();
-    _updateState(BleConnectionState.disconnected);
+    if (_isHandlingDisconnect) return;
+    _isHandlingDisconnect = true;
+    try {
+      await _cleanup();
+      _updateState(BleConnectionState.disconnected);
 
-    if (!_disposed && !_userRequestedDisconnect) {
-      _scheduleReconnect();
+      if (!_disposed && !_userRequestedDisconnect) {
+        unawaited(
+          _foregroundService.update(
+            title: 'Spike · Reconnecting…',
+            text: 'Waiting for Colmi R02 ring',
+          ),
+        );
+        _scheduleReconnect();
+      } else {
+        await _foregroundService.stop();
+      }
+    } finally {
+      _isHandlingDisconnect = false;
     }
   }
 
-  /// Schedules an automatic reconnect with exponential backoff.
-  ///
-  /// Attempts direct connection to [_lastKnownDevice] first before falling
-  /// back to a BLE scan.
   void _scheduleReconnect() {
     if (_disposed || _userRequestedDisconnect) return;
     _reconnectTimer?.cancel();
@@ -519,7 +720,6 @@ class BleService {
     });
   }
 
-  /// Update the connection state and broadcast it.
   void _updateState(BleConnectionState state) {
     _currentState = state;
     if (!_connectionStateController.isClosed) {
@@ -532,6 +732,8 @@ class BleService {
     _keepAliveTimer?.cancel();
     _keepAliveTimer = null;
     _isStreamingHr = false;
+    _keepAliveInFlight = false;
+    _isSyncingTelemetry = false;
     await _notifySub?.cancel();
     _notifySub = null;
     await _connectionSub?.cancel();
@@ -539,7 +741,9 @@ class BleService {
     _writeChar = null;
     _notifyChar = null;
     _connectedDevice = null;
+    _latestBattery = null;
     _packetBuffer.clear();
+    _sportDetailAccumulator.reset();
   }
 
   /// Dispose of all resources.
@@ -547,11 +751,15 @@ class BleService {
     _disposed = true;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
+    await _adapterStateSub?.cancel();
+    _adapterStateSub = null;
     await _isScanningSub?.cancel();
     await _scanSub?.cancel();
     await disconnect();
     await _heartRateController.close();
     await _connectionStateController.close();
     await _batteryController.close();
+    await _activitySyncController.close();
+    await _sleepSyncController.close();
   }
 }
