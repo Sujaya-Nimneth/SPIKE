@@ -4,11 +4,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../models/app_release_info.dart';
 import '../providers/ble_providers.dart';
 import '../providers/stress_providers.dart';
+import '../providers/update_providers.dart';
 import '../services/ble_service.dart';
 import '../theme/app_colors.dart';
 import '../utils/app_logger.dart';
+import '../widgets/update_dialog.dart';
 
 const String kAppVersion = '1.0.0';
 
@@ -90,7 +93,7 @@ class SettingsScreen extends ConsumerWidget {
     );
   }
 
-  void _showAboutDialog(BuildContext context) {
+  void _showAboutDialog(BuildContext context, String version) {
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -100,7 +103,7 @@ class SettingsScreen extends ConsumerWidget {
           side: const BorderSide(color: AppColors.cardBorder, width: 0.5),
         ),
         title: Text(
-          'Spike · v$kAppVersion',
+          'Spike · v$version',
           style: Theme.of(ctx).textTheme.headlineSmall,
         ),
         content: Text(
@@ -130,6 +133,9 @@ class SettingsScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final appVersion =
+        ref.watch(installedAppVersionProvider).valueOrNull ?? kAppVersion;
+
     return Scaffold(
       backgroundColor: AppColors.background,
       body: SafeArea(
@@ -200,11 +206,13 @@ class SettingsScreen extends ConsumerWidget {
 
                     const _SectionHeader(label: 'GENERAL'),
                     const SizedBox(height: 12),
+                    _CheckForUpdatesTile(currentVersion: appVersion),
+                    const SizedBox(height: 8),
                     _SettingsTile(
                       icon: Icons.info_outline_rounded,
                       title: 'About Spike',
-                      subtitle: 'Version $kAppVersion',
-                      onTap: () => _showAboutDialog(context),
+                      subtitle: 'Version $appVersion',
+                      onTap: () => _showAboutDialog(context, appVersion),
                     ),
                     const SizedBox(height: 8),
                     _SettingsTile(
@@ -213,7 +221,7 @@ class SettingsScreen extends ConsumerWidget {
                       onTap: () => showLicensePage(
                         context: context,
                         applicationName: 'Spike',
-                        applicationVersion: kAppVersion,
+                        applicationVersion: appVersion,
                       ),
                     ),
                   ],
@@ -1200,11 +1208,88 @@ class _DiscoveredDevicesList extends ConsumerWidget {
   }
 }
 
+class _CheckForUpdatesTile extends ConsumerStatefulWidget {
+  final String currentVersion;
+
+  const _CheckForUpdatesTile({required this.currentVersion});
+
+  @override
+  ConsumerState<_CheckForUpdatesTile> createState() =>
+      _CheckForUpdatesTileState();
+}
+
+class _CheckForUpdatesTileState extends ConsumerState<_CheckForUpdatesTile> {
+  bool _checking = false;
+
+  Future<void> _handleCheck() async {
+    if (_checking) return;
+    setState(() => _checking = true);
+
+    final result = await ref.read(appUpdateServiceProvider).checkForUpdate();
+    if (!mounted) return;
+    setState(() => _checking = false);
+
+    switch (result.status) {
+      case UpdateCheckStatus.updateAvailable:
+        if (result.release != null) {
+          await AppUpdateDialog.show(context, result);
+        }
+      case UpdateCheckStatus.upToDate:
+        _showSnack(
+          'Spike v${result.currentVersion} is up to date.',
+        );
+      case UpdateCheckStatus.noReleaseFound:
+        _showSnack('No APK release published on GitHub yet.');
+      case UpdateCheckStatus.error:
+        _showSnack(
+          'Update check failed: ${result.errorMessage ?? 'Unknown error'}',
+        );
+    }
+  }
+
+  void _showSnack(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: AppColors.surfaceLight,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _SettingsTile(
+      icon: Icons.system_update_rounded,
+      title: 'Check for Updates',
+      subtitle: _checking
+          ? 'Checking GitHub Releases…'
+          : 'v${widget.currentVersion} · Auto-updates via GitHub',
+      accentColor: AppColors.pastelTeal,
+      trailing: _checking
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: AppColors.pastelTeal,
+              ),
+            )
+          : null,
+      onTap: _handleCheck,
+    );
+  }
+}
+
 class _SettingsTile extends StatelessWidget {
   final IconData icon;
   final String title;
   final String? subtitle;
   final Color accentColor;
+  final Widget? trailing;
   final VoidCallback onTap;
 
   const _SettingsTile({
@@ -1212,6 +1297,7 @@ class _SettingsTile extends StatelessWidget {
     required this.title,
     this.subtitle,
     this.accentColor = AppColors.pastelBlue,
+    this.trailing,
     required this.onTap,
   });
 
@@ -1261,11 +1347,12 @@ class _SettingsTile extends StatelessWidget {
                   ],
                 ),
               ),
-              const Icon(
-                Icons.chevron_right_rounded,
-                color: AppColors.textTertiary,
-                size: 20,
-              ),
+              trailing ??
+                  const Icon(
+                    Icons.chevron_right_rounded,
+                    color: AppColors.textTertiary,
+                    size: 20,
+                  ),
             ],
           ),
         ),

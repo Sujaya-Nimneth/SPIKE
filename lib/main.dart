@@ -2,10 +2,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'models/app_release_info.dart';
 import 'models/stress_event.dart';
 import 'providers/ble_providers.dart';
 import 'providers/health_sync_providers.dart';
 import 'providers/stress_providers.dart';
+import 'providers/update_providers.dart';
 import 'screens/activity_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/leaderboard_screen.dart';
@@ -14,6 +16,7 @@ import 'screens/vitals_screen.dart';
 import 'theme/app_colors.dart';
 import 'theme/app_theme.dart';
 import 'widgets/bottom_nav_bar.dart';
+import 'widgets/update_dialog.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -60,6 +63,7 @@ class MainShell extends ConsumerStatefulWidget {
 
 class _MainShellState extends ConsumerState<MainShell> {
   final Set<int> _visitedTabs = {0};
+  bool _updateDialogShown = false;
 
   static const _screens = <Widget>[
     HomeScreen(),
@@ -93,6 +97,20 @@ class _MainShellState extends ConsumerState<MainShell> {
     if (!_visitedTabs.contains(currentIndex)) {
       _visitedTabs.add(currentIndex);
     }
+
+    // Non-blocking startup check for newer signed APK releases on GitHub
+    ref.listen<AsyncValue<UpdateCheckResult?>>(autoUpdateCheckProvider, (
+      _,
+      next,
+    ) {
+      next.whenData((result) {
+        if (!mounted || _updateDialogShown) return;
+        if (result != null && result.hasUpdate) {
+          _updateDialogShown = true;
+          unawaited(AppUpdateDialog.show(context, result));
+        }
+      });
+    });
 
     // Listen for real-time detected stress spikes and offer quick tagging
     ref.listen<AsyncValue<StressEvent>>(activeStressEventProvider, (_, next) {
