@@ -153,7 +153,7 @@ class ActivityScreen extends StatelessWidget {
   }
 
   Widget _buildStatsGrid(BuildContext context) {
-    return Row(
+    return const Row(
       children: [
         Expanded(
           child: _StatCard(
@@ -164,7 +164,7 @@ class ActivityScreen extends StatelessWidget {
             color: AppColors.pastelCoral,
           ),
         ),
-        const SizedBox(width: 12),
+        SizedBox(width: 12),
         Expanded(
           child: _StatCard(
             icon: Icons.directions_walk_rounded,
@@ -201,7 +201,7 @@ class _ActivityRings extends StatelessWidget {
           ),
         ),
         // Outer ring — Move
-        SizedBox(
+        const SizedBox(
           width: 180,
           height: 180,
           child: CircularProgressIndicator(
@@ -209,11 +209,11 @@ class _ActivityRings extends StatelessWidget {
             strokeWidth: 10,
             strokeCap: StrokeCap.round,
             backgroundColor: AppColors.surfaceVariant,
-            valueColor: const AlwaysStoppedAnimation(AppColors.pastelAmber),
+            valueColor: AlwaysStoppedAnimation(AppColors.pastelAmber),
           ),
         ),
         // Middle ring — Exercise
-        SizedBox(
+        const SizedBox(
           width: 145,
           height: 145,
           child: CircularProgressIndicator(
@@ -221,11 +221,11 @@ class _ActivityRings extends StatelessWidget {
             strokeWidth: 10,
             strokeCap: StrokeCap.round,
             backgroundColor: AppColors.surfaceVariant,
-            valueColor: const AlwaysStoppedAnimation(AppColors.pastelSage),
+            valueColor: AlwaysStoppedAnimation(AppColors.pastelSage),
           ),
         ),
         // Inner ring — Stand
-        SizedBox(
+        const SizedBox(
           width: 110,
           height: 110,
           child: CircularProgressIndicator(
@@ -233,7 +233,7 @@ class _ActivityRings extends StatelessWidget {
             strokeWidth: 10,
             strokeCap: StrokeCap.round,
             backgroundColor: AppColors.surfaceVariant,
-            valueColor: const AlwaysStoppedAnimation(AppColors.pastelCoral),
+            valueColor: AlwaysStoppedAnimation(AppColors.pastelCoral),
           ),
         ),
         // Center score

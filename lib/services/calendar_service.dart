@@ -71,7 +71,7 @@ class CalendarService {
   }
 
   void dispose() {
-    _meetingController.close();
+    unawaited(_meetingController.close());
   }
 }
 

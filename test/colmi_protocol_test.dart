@@ -10,43 +10,64 @@ void main() {
       final stopPacket = ColmiPacket.stopRealtimeHeartRate();
       final batteryPacket = ColmiPacket.requestBattery();
 
-      expect(startPacket.length, ColmiConstants.packetLength);
-      expect(continuePacket.length, ColmiConstants.packetLength);
-      expect(stopPacket.length, ColmiConstants.packetLength);
-      expect(batteryPacket.length, ColmiConstants.packetLength);
+      expect(startPacket.length, 16);
+      expect(continuePacket.length, 16);
+      expect(stopPacket.length, 16);
+      expect(batteryPacket.length, 16);
 
       expect(ColmiParser.isValidCrc(startPacket), isTrue);
       expect(ColmiParser.isValidCrc(continuePacket), isTrue);
       expect(ColmiParser.isValidCrc(stopPacket), isTrue);
       expect(ColmiParser.isValidCrc(batteryPacket), isTrue);
 
-      expect(continuePacket[0], ColmiConstants.cmdRealtimeHeartRate);
-      expect(continuePacket[1], ColmiConstants.hrTypeHeartRate);
-      expect(continuePacket[2], ColmiConstants.hrActionContinue);
+      expect(continuePacket[0], ColmiCommandId.dataRequest);
+      expect(continuePacket[1], ColmiDataType.realtimeHeartRate.value);
+      expect(continuePacket[2], ColmiDataAction.resume.value);
     });
   });
 
   group('ColmiParser', () {
-    test('parses valid heart rate notification', () {
+    test('parses valid DataRequest heart rate notification', () {
       final packet = ColmiPacket.build(
-        ColmiConstants.cmdRealtimeHeartRate,
-        [ColmiConstants.hrTypeHeartRate, 0x00, 76],
+        ColmiCommandId.dataRequest,
+        [ColmiDataType.realtimeHeartRate.value, 0x00, 76],
       );
 
-      final parsed = ColmiParser.parseHeartRateResponse(packet);
-      expect(parsed, isNotNull);
-      expect(parsed!.bpm, 76);
-      expect(parsed.hasError, isFalse);
-      expect(parsed.isValid, isTrue);
+      final bpm = ColmiParser.parseRealtimeHeartRate(packet);
+      expect(bpm, 76);
+    });
+
+    test('parses valid legacy realtimeHeartRate notification', () {
+      final packet = ColmiPacket.build(
+        ColmiCommandId.realtimeHeartRate,
+        [84],
+      );
+
+      final bpm = ColmiParser.parseRealtimeHeartRate(packet);
+      expect(bpm, 84);
+    });
+
+    test('returns null on error bit or non-zero error code', () {
+      final errPacket = ColmiPacket.build(
+        ColmiCommandId.dataRequest,
+        [ColmiDataType.realtimeHeartRate.value, 0x01, 76],
+      );
+      expect(ColmiParser.parseRealtimeHeartRate(errPacket), isNull);
+
+      final errBitPacket = ColmiPacket.build(
+        ColmiCommandId.realtimeHeartRate | 0x80,
+        [76],
+      );
+      expect(ColmiParser.parseRealtimeHeartRate(errBitPacket), isNull);
     });
 
     test('parses valid battery notification', () {
       final packet = ColmiPacket.build(
-        ColmiConstants.cmdBattery,
+        ColmiCommandId.battery,
         [84, 1],
       );
 
-      final parsed = ColmiParser.parseBatteryResponse(packet);
+      final parsed = ColmiParser.parseBattery(packet);
       expect(parsed, isNotNull);
       expect(parsed!.percent, 84);
       expect(parsed.isCharging, isTrue);
@@ -54,11 +75,11 @@ void main() {
 
     test('extractValidPackets resynchronizes across stray corrupted bytes', () {
       final validHrPacket = ColmiPacket.build(
-        ColmiConstants.cmdRealtimeHeartRate,
-        [ColmiConstants.hrTypeHeartRate, 0x00, 82],
+        ColmiCommandId.dataRequest,
+        [ColmiDataType.realtimeHeartRate.value, 0x00, 82],
       );
       final validBatteryPacket = ColmiPacket.build(
-        ColmiConstants.cmdBattery,
+        ColmiCommandId.battery,
         [65, 0],
       );
 
@@ -77,8 +98,8 @@ void main() {
 
       final packets = ColmiParser.extractValidPackets(streamBuffer);
       expect(packets.length, 2);
-      expect(ColmiParser.parseHeartRateResponse(packets[0])?.bpm, 82);
-      expect(ColmiParser.parseBatteryResponse(packets[1])?.percent, 65);
+      expect(ColmiParser.parseRealtimeHeartRate(packets[0]), 82);
+      expect(ColmiParser.parseBattery(packets[1])?.percent, 65);
 
       // Trailing 2 incomplete bytes remain in the buffer for the next notification chunk
       expect(streamBuffer, equals([0x1E, 0x01]));
@@ -87,14 +108,13 @@ void main() {
     test('rejects packet with corrupted CRC', () {
       final packet = Uint8List.fromList(
         ColmiPacket.build(
-          ColmiConstants.cmdRealtimeHeartRate,
-          [ColmiConstants.hrTypeHeartRate, 0x00, 72],
+          ColmiCommandId.dataRequest,
+          [ColmiDataType.realtimeHeartRate.value, 0x00, 72],
         ),
       );
       packet[15] = (packet[15] + 1) & 0xFF;
 
       expect(ColmiParser.isValidCrc(packet), isFalse);
-      expect(ColmiParser.parseHeartRateResponse(packet), isNull);
     });
   });
 }

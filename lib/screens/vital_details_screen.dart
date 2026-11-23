@@ -459,7 +459,7 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
           show: true,
           drawVerticalLine: false,
           horizontalInterval: ((maxY - minY) / 4).clamp(1.0, 50.0),
-          getDrawingHorizontalLine: (value) => FlLine(
+          getDrawingHorizontalLine: (value) => const FlLine(
             color: AppColors.surfaceVariant,
             strokeWidth: 0.5,
           ),
@@ -547,7 +547,7 @@ class _VitalDetailsScreenState extends ConsumerState<VitalDetailsScreen>
           show: true,
           drawVerticalLine: false,
           horizontalInterval: ((config.hardMaxY - config.hardMinY) / 4).clamp(1.0, 50.0),
-          getDrawingHorizontalLine: (value) => FlLine(
+          getDrawingHorizontalLine: (value) => const FlLine(
             color: AppColors.surfaceVariant,
             strokeWidth: 0.5,
           ),

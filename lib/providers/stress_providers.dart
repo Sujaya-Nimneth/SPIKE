@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/stress_event.dart';
 import '../models/leaderboard_entry.dart';
@@ -50,7 +51,7 @@ final activeMeetingProvider =
 /// Provides the [DatabaseService] instance.
 final databaseServiceProvider = Provider<DatabaseService>((ref) {
   final service = DatabaseService();
-  ref.onDispose(() => service.close());
+  ref.onDispose(() => unawaited(service.close()));
   return service;
 });
 
