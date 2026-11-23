@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../services/ble_service.dart';
@@ -8,7 +9,7 @@ import '../services/ble_service.dart';
 final bleServiceProvider = Provider<BleService>((ref) {
   final service = BleService();
   ref.onDispose(() {
-    service.dispose();
+    unawaited(service.dispose());
   });
   return service;
 });

@@ -84,16 +84,16 @@ class StressAnalyzerService {
   /// Stop the analyzer subscription.
   void stop() {
     _isRunning = false;
-    _hrSubscription?.cancel();
+    unawaited(_hrSubscription?.cancel());
     _hrSubscription = null;
   }
 
   /// Dispose of all resources.
   void dispose() {
     stop();
-    _eventController.close();
-    _calmScoreController.close();
-    _phaseController.close();
+    unawaited(_eventController.close());
+    unawaited(_calmScoreController.close());
+    unawaited(_phaseController.close());
   }
 
   // ── Core Processing ─────────────────────────────────────────

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/leaderboard_entry.dart';
@@ -1117,7 +1118,7 @@ class _StartMeetingSheetState extends ConsumerState<_StartMeetingSheet> {
       _selectedCoworkers.add(trimmed);
       _nameController.clear();
     });
-    ref.read(databaseServiceProvider).addCoworker(trimmed);
+    unawaited(ref.read(databaseServiceProvider).addCoworker(trimmed));
   }
 
   @override
@@ -1316,7 +1317,7 @@ class _TagSpikeSheetState extends ConsumerState<_TagSpikeSheet> {
       _selectedCoworkers.add(trimmed);
       _nameController.clear();
     });
-    ref.read(databaseServiceProvider).addCoworker(trimmed);
+    unawaited(ref.read(databaseServiceProvider).addCoworker(trimmed));
   }
 
   Future<void> _save() async {

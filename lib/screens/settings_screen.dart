@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -706,9 +707,9 @@ class _ScanButtonState extends ConsumerState<_ScanButton> {
   void _handleTap() {
     AppLogger.info('Settings', 'Scan button tapped');
     setState(() => _tapped = true);
-    Future.delayed(const Duration(milliseconds: 300), () {
+    unawaited(Future.delayed(const Duration(milliseconds: 300), () {
       if (mounted) setState(() => _tapped = false);
-    });
+    }));
 
     final connectionAsync = ref.read(bleConnectionStateProvider);
     final state = connectionAsync.valueOrNull ?? BleConnectionState.disconnected;
@@ -717,10 +718,10 @@ class _ScanButtonState extends ConsumerState<_ScanButton> {
 
     if (isScanning) {
       AppLogger.info('Settings', 'Stopping scan...');
-      service.stopScan();
+      unawaited(service.stopScan());
     } else {
       AppLogger.info('Settings', 'Starting scan...');
-      service.forceStartScan();
+      unawaited(service.forceStartScan());
     }
   }
 
@@ -863,9 +864,11 @@ class _DiscoveredDevicesList extends ConsumerWidget {
                   padding: const EdgeInsets.only(bottom: 8),
                   child: GestureDetector(
                     onTap: () {
-                      ref
-                          .read(bleServiceProvider)
-                          .connectToDevice(r.device);
+                      unawaited(
+                        ref
+                            .read(bleServiceProvider)
+                            .connectToDevice(r.device),
+                      );
                     },
                     child: Container(
                       padding: const EdgeInsets.symmetric(

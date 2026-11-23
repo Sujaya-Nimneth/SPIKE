@@ -59,7 +59,7 @@ class MetricCard extends StatelessWidget {
                   child: Icon(icon, color: accentColor, size: 18),
                 ),
                 const Spacer(),
-                Icon(
+                const Icon(
                   Icons.chevron_right_rounded,
                   color: AppColors.textTertiary,
                   size: 20,

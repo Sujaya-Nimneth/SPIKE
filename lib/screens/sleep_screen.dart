@@ -80,28 +80,28 @@ class SleepScreen extends StatelessWidget {
             style: Theme.of(context).textTheme.headlineSmall,
           ),
           const SizedBox(height: 20),
-          _SleepStageRow(
+          const _SleepStageRow(
             label: 'Awake',
             duration: '0h 23m',
             fraction: 0.05,
             color: AppColors.textSecondary,
           ),
           const SizedBox(height: 12),
-          _SleepStageRow(
+          const _SleepStageRow(
             label: 'REM',
             duration: '1h 45m',
             fraction: 0.25,
             color: AppColors.pastelLavender,
           ),
           const SizedBox(height: 12),
-          _SleepStageRow(
+          const _SleepStageRow(
             label: 'Light',
             duration: '3h 10m',
             fraction: 0.45,
             color: AppColors.pastelBlue,
           ),
           const SizedBox(height: 12),
-          _SleepStageRow(
+          const _SleepStageRow(
             label: 'Deep',
             duration: '1h 52m',
             fraction: 0.25,
@@ -120,16 +120,16 @@ class SleepScreen extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
         border: Border.all(color: AppColors.cardBorder, width: 0.5),
       ),
-      child: Column(
+      child: const Column(
         children: [
           _DetailRow(label: 'Total Sleep', value: '7h 10m'),
-          const Divider(color: AppColors.divider, height: 24),
+          Divider(color: AppColors.divider, height: 24),
           _DetailRow(label: 'Time in Bed', value: '7h 33m'),
-          const Divider(color: AppColors.divider, height: 24),
+          Divider(color: AppColors.divider, height: 24),
           _DetailRow(label: 'Sleep Efficiency', value: '95%'),
-          const Divider(color: AppColors.divider, height: 24),
+          Divider(color: AppColors.divider, height: 24),
           _DetailRow(label: 'Resting HR', value: '52 bpm'),
-          const Divider(color: AppColors.divider, height: 24),
+          Divider(color: AppColors.divider, height: 24),
           _DetailRow(label: 'Bedtime', value: '11:12 PM'),
         ],
       ),
@@ -160,7 +160,7 @@ class _SleepScoreRing extends StatelessWidget {
                 ],
               ),
             ),
-            SizedBox(
+            const SizedBox(
               width: 160,
               height: 160,
               child: CircularProgressIndicator(
@@ -168,7 +168,7 @@ class _SleepScoreRing extends StatelessWidget {
                 strokeWidth: 8,
                 strokeCap: StrokeCap.round,
                 backgroundColor: AppColors.surfaceVariant,
-                valueColor: const AlwaysStoppedAnimation(AppColors.pastelLavender),
+                valueColor: AlwaysStoppedAnimation(AppColors.pastelLavender),
               ),
             ),
             Column(

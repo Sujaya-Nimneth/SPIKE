@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -70,10 +71,10 @@ class _MainShellState extends ConsumerState<MainShell> {
   @override
   void initState() {
     super.initState();
-    Future.microtask(() {
+    unawaited(Future.microtask(() {
       ref.read(autoScanProvider);
       ref.read(stressAnalyzerProvider);
-    });
+    }));
   }
 
   @override
