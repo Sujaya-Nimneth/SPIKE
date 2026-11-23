@@ -50,7 +50,7 @@ class AppUpdateService {
         return name;
       }
     } catch (e) {
-      AppLogger.w('Updater', 'Failed to query installed version: $e');
+      AppLogger.warn('Updater', 'Failed to query installed version', e);
     }
     return fallbackVersion;
   }
@@ -125,7 +125,7 @@ class AppUpdateService {
         release: release,
       );
     } catch (e) {
-      AppLogger.w('Updater', 'Update check failed: $e');
+      AppLogger.warn('Updater', 'Update check failed', e);
       return UpdateCheckResult(
         status: UpdateCheckStatus.error,
         currentVersion: currentVersion,
@@ -231,9 +231,9 @@ class AppUpdateService {
       await partFile.rename(targetPath);
       partFile = null;
 
-      return installLocalApk(targetPath);
+      return await installLocalApk(targetPath);
     } catch (e) {
-      AppLogger.e('Updater', 'APK download/install failed', e);
+      AppLogger.error('Updater', 'APK download/install failed', e);
       if (partFile != null && await partFile.exists()) {
         try {
           await partFile.delete();
@@ -276,7 +276,7 @@ class AppUpdateService {
         apkPath: apkPath,
       );
     } catch (e) {
-      AppLogger.e('Updater', 'Native APK install call failed', e);
+      AppLogger.error('Updater', 'Native APK install call failed', e);
       return UpdateInstallResult(
         status: UpdateInstallStatus.error,
         apkPath: apkPath,
